@@ -83,10 +83,12 @@ systemctl restart postgresql
 # --- app user + venv ---------------------------------------------------------
 id imageapp >/dev/null 2>&1 || useradd -r -m -d /opt/imageapp -s /sbin/nologin imageapp
 mkdir -p /opt/imageapp/app
+chown imageapp:imageapp /opt/imageapp/app
 if [ ! -d /opt/imageapp/venv ]; then
     python3 -m venv /opt/imageapp/venv
+    chown -R imageapp:imageapp /opt/imageapp/venv
 fi
-/opt/imageapp/venv/bin/pip install --upgrade pip
+sudo -u imageapp /opt/imageapp/venv/bin/pip install --upgrade pip
 
 # --- env file (rewritten every run so it always matches the current PGPASS) -
 cat > /opt/imageapp/app.env <<EOF

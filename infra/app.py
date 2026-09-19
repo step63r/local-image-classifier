@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 """CDK app entrypoint.
 
-Requires two context values on every invocation (see infra/README.md):
-    cdk deploy --all -c myIp=203.0.113.10/32 -c domainName=images.example.com
+Requires a domainName context value on every invocation (see infra/README.md):
+    cdk deploy --all -c domainName=images.example.com
+
+No SSH key pair or inbound port 22 is created -- instance access is via AWS
+Systems Manager Session Manager only (console or `aws ssm start-session`).
 """
 from __future__ import annotations
 
@@ -33,13 +36,11 @@ def cloudfront_origin_facing_prefix_list_id(region: str) -> str:
 
 app = cdk.App()
 
-my_ip = app.node.try_get_context("myIp")
 domain_name = app.node.try_get_context("domainName")
-if not my_ip or not domain_name:
+if not domain_name:
     raise SystemExit(
-        "Missing required context. Pass -c myIp=<your-ip>/32 -c domainName=<fqdn> to every "
-        "`cdk` command, e.g.:\n"
-        "  cdk deploy --all -c myIp=203.0.113.10/32 -c domainName=images.example.com"
+        "Missing required context. Pass -c domainName=<fqdn> to every `cdk` command, e.g.:\n"
+        "  cdk deploy --all -c domainName=images.example.com"
     )
 
 auth_username = app.node.try_get_context("authUsername") or "admin"
@@ -58,7 +59,6 @@ cert_stack = CertificateStack(
 app_stack = AppStack(
     app,
     "ImageClassifierAppStack",
-    my_ip=my_ip,
     domain_name=domain_name,
     auth_username=auth_username,
     auth_password=auth_password,

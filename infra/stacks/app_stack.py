@@ -20,7 +20,6 @@ class AppStack(Stack):
         scope: Construct,
         construct_id: str,
         *,
-        my_ip: str,
         domain_name: str,
         auth_username: str,
         auth_password: str,
@@ -55,6 +54,10 @@ class AppStack(Stack):
         )
 
         # --- Security group ---------------------------------------------------
+        # No inbound SSH at all: instance access is via SSM Session Manager only
+        # (the instance role's AmazonSSMManagedInstanceCore policy is enough --
+        # SSM works over an outbound connection the instance itself initiates,
+        # so no inbound port or key pair is needed).
         app_sg = ec2.SecurityGroup(
             self,
             "AppSecurityGroup",
@@ -62,7 +65,6 @@ class AppStack(Stack):
             description="local-image-classifier app instance",
             allow_all_outbound=True,
         )
-        app_sg.add_ingress_rule(ec2.Peer.ipv4(my_ip), ec2.Port.tcp(22), "SSH from home IP only")
         app_sg.add_ingress_rule(
             ec2.Peer.prefix_list(cloudfront_prefix_list_id),
             ec2.Port.tcp(APP_PORT),
@@ -70,15 +72,6 @@ class AppStack(Stack):
         )
         # Deliberately no rule for 5432: PostgreSQL binds to localhost only,
         # so there is nothing to expose regardless of SG rules (belt+suspenders).
-
-        # --- Key pair (private key auto-stored in SSM Parameter Store) --------
-        key_pair = ec2.KeyPair(
-            self,
-            "AppKeyPair",
-            key_pair_name="local-image-classifier-key",
-            type=ec2.KeyPairType.ED25519,
-            format=ec2.KeyPairFormat.PEM,
-        )
 
         # --- system_setup.sh delivered as an asset, fetched by UserData --------
         setup_script_asset = s3_assets.Asset(
@@ -109,7 +102,6 @@ class AppStack(Stack):
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             security_group=app_sg,
             role=instance_role,
-            key_pair=key_pair,
             block_devices=[
                 ec2.BlockDevice(
                     device_name="/dev/xvda",
@@ -209,7 +201,7 @@ class AppStack(Stack):
             price_class=cloudfront.PriceClass.PRICE_CLASS_200,
         )
 
+        CfnOutput(self, "InstanceId", value=instance.instance_id)
         CfnOutput(self, "InstancePublicIp", value=eip.ref)
         CfnOutput(self, "MediaBucketName", value=bucket.bucket_name)
         CfnOutput(self, "DistributionDomainName", value=distribution.distribution_domain_name)
-        CfnOutput(self, "KeyPairSsmParameter", value=f"/ec2/keypair/{key_pair.key_pair_id}")

@@ -1,43 +1,79 @@
 <#
 .SYNOPSIS
     Ships app.py/requirements-server.txt/templates to the EC2 instance and
-    restarts the imageapp service. No CI/CD -- just scp + ssh, matching the
-    "necessary minimum" scope of this deployment.
+    restarts the imageapp service, via S3 + SSM Run Command (no SSH/scp --
+    the instance has no open SSH port or key pair; see infra/README.md).
 
 .EXAMPLE
-    $env:IMAGEAPP_HOST = "203.0.113.50"   # the Elastic IP from the CDK output
+    $env:IMAGEAPP_INSTANCE_ID = "i-0123456789abcdef0"   # CDK output InstanceId
+    $env:IMAGEAPP_BUCKET = "imageclassifierappstack-mediabucket-xxxx"  # CDK output MediaBucketName
     .\deploy_app.ps1
 #>
 param(
-    [string]$AppHost = $env:IMAGEAPP_HOST,
-    [string]$Key = "infra/keys/local-image-classifier-key.pem",
-    [string]$RemoteUser = "ec2-user"
+    [string]$InstanceId = $env:IMAGEAPP_INSTANCE_ID,
+    [string]$Bucket = $env:IMAGEAPP_BUCKET
 )
 
-if (-not $AppHost) {
-    Write-Error "Set `$env:IMAGEAPP_HOST or pass -AppHost <ip>. See CDK output InstancePublicIp."
+if (-not $InstanceId) {
+    Write-Error "Set `$env:IMAGEAPP_INSTANCE_ID or pass -InstanceId <id>. See CDK output InstanceId."
     exit 1
 }
-if (-not (Test-Path $Key)) {
-    Write-Error "SSH key not found at $Key. Fetch it once with:`n  aws ssm get-parameter --name /ec2/keypair/<key-id> --with-decryption --query Parameter.Value --output text > $Key"
+if (-not $Bucket) {
+    Write-Error "Set `$env:IMAGEAPP_BUCKET or pass -Bucket <name>. See CDK output MediaBucketName."
     exit 1
 }
 
-Write-Host "Deploying to $RemoteUser@$AppHost ..."
+$archive = Join-Path $env:TEMP "imageapp-deploy.tar.gz"
+if (Test-Path $archive) { Remove-Item $archive }
 
-ssh -i $Key "$RemoteUser@$AppHost" "sudo mkdir -p /opt/imageapp/app/templates && sudo chown -R ${RemoteUser}:${RemoteUser} /opt/imageapp/app"
+Write-Host "Packaging app.py, requirements-server.txt, templates/ ..."
+tar -czf $archive app.py requirements-server.txt templates
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-scp -i $Key app.py requirements-server.txt "${RemoteUser}@${AppHost}:/opt/imageapp/app/"
+$s3Key = "deploy/app.tar.gz"
+Write-Host "Uploading to s3://$Bucket/$s3Key ..."
+aws s3 cp $archive "s3://$Bucket/$s3Key"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Remove-Item $archive
 
-scp -i $Key -r templates "${RemoteUser}@${AppHost}:/opt/imageapp/app/"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-ssh -i $Key "$RemoteUser@$AppHost" @'
-sudo chown -R imageapp:imageapp /opt/imageapp/app
+$remoteScript = @"
+set -euo pipefail
+sudo -u imageapp aws s3 cp s3://$Bucket/$s3Key /tmp/imageapp-deploy.tar.gz
+sudo -u imageapp mkdir -p /opt/imageapp/app
+sudo -u imageapp tar -xzf /tmp/imageapp-deploy.tar.gz -C /opt/imageapp/app
 sudo -u imageapp /opt/imageapp/venv/bin/pip install -q -r /opt/imageapp/app/requirements-server.txt
 sudo systemctl restart imageapp
 sleep 1
 sudo systemctl status imageapp --no-pager
-'@
+"@
+
+Write-Host "Sending deploy command via SSM to $InstanceId ..."
+$paramsFile = Join-Path $env:TEMP "imageapp-ssm-params.json"
+@{ commands = @($remoteScript) } | ConvertTo-Json -Depth 3 | Set-Content -Path $paramsFile -Encoding utf8
+
+$commandId = aws ssm send-command `
+    --instance-ids $InstanceId `
+    --document-name "AWS-RunShellScript" `
+    --parameters file://$paramsFile `
+    --query "Command.CommandId" --output text
+Remove-Item $paramsFile
+
+if (-not $commandId) {
+    Write-Error "Failed to send SSM command."
+    exit 1
+}
+
+Write-Host "Command $commandId sent, waiting for completion..."
+do {
+    Start-Sleep -Seconds 2
+    $status = aws ssm get-command-invocation --command-id $commandId --instance-id $InstanceId --query "Status" --output text
+} while ($status -eq "InProgress" -or $status -eq "Pending")
+
+aws ssm get-command-invocation --command-id $commandId --instance-id $InstanceId `
+    --query "{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}" --output json
+
+if ($status -ne "Success") {
+    Write-Error "Deploy command finished with status: $status"
+    exit 1
+}
+Write-Host "Deploy complete."
