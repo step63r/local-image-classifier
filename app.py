@@ -8,7 +8,7 @@ from pathlib import Path
 
 from flask import Flask, abort, render_template, request, send_file
 
-DB_PATH = Path(os.environ.get("TAGS_DB", "tags.db"))
+DB_PATH = Path(os.environ.get("TAGS_DB", Path(__file__).parent / "tags.db"))
 PAGE_SIZE = 40
 
 # batch_tag.py stores tags down to a low floor (default 0.1) so these display
@@ -26,13 +26,21 @@ def get_conn() -> sqlite3.Connection:
 
 
 def parse_query(q: str) -> list[str]:
-    return [t.strip() for t in q.replace(",", " ").split() if t.strip()]
+    # Tags are separated by whitespace; a multi-word tag itself (e.g. from
+    # "azur lane") is written with underscores, as on booru-style tag search
+    # boxes, and normalized here to match the space form stored in the DB.
+    return [t.replace("_", " ").strip() for t in q.replace(",", " ").split() if t.strip()]
 
 
 def get_thresholds() -> tuple[float, float]:
     gt = request.args.get("gt", DEFAULT_GENERAL_THRESHOLD, type=float)
     ct = request.args.get("ct", DEFAULT_CHARACTER_THRESHOLD, type=float)
     return gt, ct
+
+
+def like_pattern(term: str) -> str:
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def search_images(conn: sqlite3.Connection, tags: list[str], gt: float, ct: float, page: int):
@@ -48,32 +56,33 @@ def search_images(conn: sqlite3.Connection, tags: list[str], gt: float, ct: floa
         total = conn.execute("SELECT COUNT(*) FROM images WHERE status = 'done'").fetchone()[0]
         return rows, total
 
-    placeholders = ",".join("?" for _ in tags)
+    # Each search term must match at least one tag on the image (substring,
+    # not exact match) that also clears the current display threshold.
+    exists_clauses = []
+    params: list = []
+    for term in tags:
+        exists_clauses.append(
+            f"""EXISTS (
+                SELECT 1 FROM tags tg
+                WHERE tg.image_id = i.id AND tg.tag LIKE ? ESCAPE '\\' AND ({threshold_clause})
+            )"""
+        )
+        params.extend([like_pattern(term), ct, gt])
+    where = " AND ".join(exists_clauses)
+
     rows = conn.execute(
         f"""
         SELECT i.id, i.path FROM images i
-        WHERE i.status = 'done' AND i.id IN (
-            SELECT image_id FROM tags
-            WHERE tag IN ({placeholders}) AND ({threshold_clause})
-            GROUP BY image_id
-            HAVING COUNT(DISTINCT tag) = ?
-        )
+        WHERE i.status = 'done' AND {where}
         ORDER BY i.tagged_at DESC
         LIMIT ? OFFSET ?
         """,
-        (*tags, ct, gt, len(tags), PAGE_SIZE, offset),
+        (*params, PAGE_SIZE, offset),
     ).fetchall()
 
     total = conn.execute(
-        f"""
-        SELECT COUNT(*) FROM (
-            SELECT image_id FROM tags
-            WHERE tag IN ({placeholders}) AND ({threshold_clause})
-            GROUP BY image_id
-            HAVING COUNT(DISTINCT tag) = ?
-        )
-        """,
-        (*tags, ct, gt, len(tags)),
+        f"SELECT COUNT(*) FROM images i WHERE i.status = 'done' AND {where}",
+        params,
     ).fetchone()[0]
     return rows, total
 
