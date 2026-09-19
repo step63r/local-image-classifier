@@ -25,9 +25,26 @@ if [ ! -f /swapfile ]; then
 fi
 
 # --- PostgreSQL 16 + pgvector ------------------------------------------------
+# NOTE: "postgresql16-devel" is NOT a real package name on AL2023 -- it
+# resolves (via a Provides: alias) to postgresql16-private-devel, which was
+# found in production to install a broken /usr/bin/pg_config symlink
+# (-> nonexistent pg_server_config), breaking the pgvector build below.
+# postgresql16-server-devel is the real package providing the PGXS headers
+# (Makefile.global etc.) needed to build a server extension; request it by
+# its real name instead of the ambiguous alias.
 if ! rpm -q postgresql16-server >/dev/null 2>&1; then
-    dnf install -y postgresql16 postgresql16-server postgresql16-devel postgresql16-contrib \
+    dnf install -y postgresql16 postgresql16-server postgresql16-server-devel postgresql16-contrib \
         gcc make git python3 python3-pip
+fi
+
+if ! /usr/bin/pg_config --version >/dev/null 2>&1; then
+    echo "pg_config is missing or broken -- attempting repair" >&2
+    rpm -q postgresql16-private-devel >/dev/null 2>&1 && dnf remove -y postgresql16-private-devel
+    dnf install -y postgresql16-server-devel
+    /usr/bin/pg_config --version >/dev/null 2>&1 || {
+        echo "pg_config still broken after repair attempt -- aborting" >&2
+        exit 1
+    }
 fi
 
 PG_DATA_DIR="/var/lib/pgsql/data"
@@ -35,7 +52,18 @@ if [ ! -f "${PG_DATA_DIR}/PG_VERSION" ]; then
     /usr/bin/postgresql-setup --initdb
 fi
 
+# AL2023's default pg_hba.conf uses "ident" for TCP connections to
+# 127.0.0.1/::1, which rejects password auth entirely (found in production:
+# the app connects over TCP via DATABASE_URL, not the local Unix socket, so
+# this must be password-based). Idempotent: sed is a no-op once already
+# scram-sha-256.
+sed -i \
+    -e 's/^\(host\s\+all\s\+all\s\+127\.0\.0\.1\/32\s\+\)ident/\1scram-sha-256/' \
+    -e 's/^\(host\s\+all\s\+all\s\+::1\/128\s\+\)ident/\1scram-sha-256/' \
+    "${PG_DATA_DIR}/pg_hba.conf"
+
 systemctl enable --now postgresql
+systemctl reload postgresql
 
 until sudo -u postgres psql -tAc "SELECT 1" >/dev/null 2>&1; do
     echo "waiting for postgresql to accept connections..."

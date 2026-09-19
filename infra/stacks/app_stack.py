@@ -1,4 +1,4 @@
-from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import CfnOutput, Duration, Fn, RemovalPolicy, Stack
 from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
@@ -111,14 +111,19 @@ class AppStack(Stack):
             user_data=user_data,
         )
 
-        # --- Elastic IP: keeps the CloudFront origin + SSH tunnel target stable
+        # --- Elastic IP: keeps the CloudFront origin + SSM tunnel target stable
         eip = ec2.CfnEIP(self, "AppEip", instance_id=instance.instance_id, domain="vpc")
 
         # --- CloudFront ---------------------------------------------------------
         # Single origin (the EC2 instance) so Flask-HTTPAuth stays the one and
         # only auth gate -- there is deliberately no separate S3-direct origin.
+        # CloudFront rejects a bare IP address as a custom origin domain name,
+        # so derive AWS's own DNS hostname for the EIP (ec2-1-2-3-4.<region>.
+        # compute.amazonaws.com) instead of using eip.ref directly.
+        eip_dashed = Fn.join("-", Fn.split(".", eip.ref))
+        eip_hostname = f"ec2-{eip_dashed}.{self.region}.compute.amazonaws.com"
         ec2_origin = origins.HttpOrigin(
-            eip.ref,
+            eip_hostname,
             http_port=APP_PORT,
             protocol_policy=cloudfront.OriginProtocolPolicy.HTTP_ONLY,
         )
@@ -147,9 +152,13 @@ class AppStack(Stack):
         # app needs to see the real query string + auth + htmx headers.
         # `Authorization` (and `Accept-Encoding`) can only be forwarded via a
         # CachePolicy's header allow-list, not an OriginRequestPolicy's -- so
-        # this uses an all-zero-TTL *custom* CachePolicy (CloudFront's own
+        # this uses a near-zero-TTL *custom* CachePolicy (CloudFront's own
         # CACHING_DISABLED managed policy forwards no extra headers/query
         # strings at all, which would break search params and auth here).
+        # max_ttl must be > 0: CloudFront rejects a non-none HeaderBehavior on
+        # a policy where min/default/max TTL are all exactly 0 ("caching
+        # disabled"), so max_ttl=1s keeps it just barely "enabled" while
+        # default_ttl=0 still means practically no caching for these routes.
         search_cache_policy = cloudfront.CachePolicy(
             self,
             "SearchCachePolicy",
@@ -158,7 +167,7 @@ class AppStack(Stack):
             query_string_behavior=cloudfront.CacheQueryStringBehavior.all(),
             cookie_behavior=cloudfront.CacheCookieBehavior.none(),
             default_ttl=Duration.seconds(0),
-            max_ttl=Duration.seconds(0),
+            max_ttl=Duration.seconds(1),
             min_ttl=Duration.seconds(0),
         )
         search_origin_request_policy = cloudfront.OriginRequestPolicy(
