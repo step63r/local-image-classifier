@@ -9,3 +9,7 @@ onnxruntime-gpu==1.30.0
 tqdm==4.70.1
 Flask==3.1.0
 Flask-HTTPAuth==4.8.0
+
+# For migrate_to_aws.py (runs locally, not on the server -- see requirements-server.txt)
+boto3==1.35.99
+psycopg2-binary==2.9.10

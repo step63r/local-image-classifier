@@ -1,17 +1,27 @@
 #!/usr/bin/env python
-"""Minimal Flask UI for searching WD14 tags stored by batch_tag.py."""
+"""Minimal Flask UI for searching WD14 tags stored by batch_tag.py / migrate_to_aws.py.
+
+Reads from PostgreSQL (DATABASE_URL) and serves images/thumbnails from S3
+(S3_BUCKET), streamed through Flask so Basic Auth stays the single gate for
+all content, including images -- see infra/README.md for the CloudFront
+cache-key implications of that design.
+"""
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 from urllib.parse import urlencode
 
-from flask import Flask, abort, render_template, request, send_file
+import boto3
+import botocore.exceptions
+import psycopg2
+import psycopg2.extras
+from flask import Flask, Response, abort, render_template, request, stream_with_context
 from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import check_password_hash, generate_password_hash
 
-DB_PATH = Path(os.environ.get("TAGS_DB", Path(__file__).parent / "tags.db"))
+DATABASE_URL = os.environ["DATABASE_URL"]
+S3_BUCKET = os.environ["S3_BUCKET"]
 PAGE_SIZE = 40
 
 # batch_tag.py stores tags down to a low floor (default 0.1) so these display
@@ -21,6 +31,7 @@ DEFAULT_CHARACTER_THRESHOLD = 0.85
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
+s3 = boto3.client("s3")  # picks up creds from the EC2 instance role automatically
 
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "admin")
 _default_password_hash = generate_password_hash(os.environ.get("AUTH_PASSWORD", "changeme"))
@@ -42,9 +53,9 @@ def verify_password(username: str, password: str) -> str | None:
     return None
 
 
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def get_conn() -> psycopg2.extensions.connection:
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    conn.autocommit = True  # app.py is read-only; avoids idle-in-transaction connections
     return conn
 
 
@@ -67,16 +78,16 @@ def like_pattern(term: str) -> str:
 
 
 def search_images(
-    conn: sqlite3.Connection, tags: list[str], folder: str, gt: float, ct: float, page: int
+    conn: psycopg2.extensions.connection, tags: list[str], folder: str, gt: float, ct: float, page: int
 ):
     offset = (page - 1) * PAGE_SIZE
-    threshold_clause = "(category = 'character' AND confidence >= ?) OR (category != 'character' AND confidence >= ?)"
+    threshold_clause = "(category = 'character' AND confidence >= %s) OR (category != 'character' AND confidence >= %s)"
 
     conditions = ["i.status = 'done'"]
     params: list = []
 
     if folder:
-        conditions.append("i.path LIKE ? ESCAPE '\\'")
+        conditions.append("i.path LIKE %s ESCAPE '\\'")
         params.append(like_pattern(folder))
 
     # Each search term must match at least one tag on the image (substring,
@@ -85,27 +96,28 @@ def search_images(
         conditions.append(
             f"""EXISTS (
                 SELECT 1 FROM tags tg
-                WHERE tg.image_id = i.id AND tg.tag LIKE ? ESCAPE '\\' AND ({threshold_clause})
+                WHERE tg.image_id = i.id AND tg.tag LIKE %s ESCAPE '\\' AND ({threshold_clause})
             )"""
         )
         params.extend([like_pattern(term), ct, gt])
 
     where = " AND ".join(conditions)
 
-    rows = conn.execute(
-        f"""
-        SELECT i.id, i.path FROM images i
-        WHERE {where}
-        ORDER BY i.tagged_at DESC
-        LIMIT ? OFFSET ?
-        """,
-        (*params, PAGE_SIZE, offset),
-    ).fetchall()
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT i.id, i.path FROM images i
+            WHERE {where}
+            ORDER BY i.tagged_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            (*params, PAGE_SIZE, offset),
+        )
+        rows = cur.fetchall()
 
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM images i WHERE {where}",
-        params,
-    ).fetchone()[0]
+        cur.execute(f"SELECT COUNT(*) AS count FROM images i WHERE {where}", params)
+        total = cur.fetchone()["count"]
+
     return rows, total
 
 
@@ -155,20 +167,52 @@ def index():
     return render_template("index.html", **context)
 
 
+def _stream_s3(key: str, fallback_content_type: str) -> Response:
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+    except botocore.exceptions.ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            abort(404)
+        raise
+    return Response(
+        stream_with_context(obj["Body"].iter_chunks(chunk_size=65536)),
+        content_type=obj.get("ContentType") or fallback_content_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Content-Length": str(obj["ContentLength"]),
+        },
+    )
+
+
 @app.route("/image/<int:image_id>")
 @auth.login_required
 def image(image_id: int):
     conn = get_conn()
     try:
-        row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT path FROM images WHERE id = %s", (image_id,))
+            row = cur.fetchone()
     finally:
         conn.close()
     if row is None:
         abort(404)
-    path = Path(row["path"])
-    if not path.is_file():
+    ext = Path(row["path"]).suffix.lower() or ".jpg"
+    return _stream_s3(f"original/{image_id}{ext}", "application/octet-stream")
+
+
+@app.route("/thumb/<int:image_id>")
+@auth.login_required
+def thumb(image_id: int):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM images WHERE id = %s", (image_id,))
+            found = cur.fetchone() is not None
+    finally:
+        conn.close()
+    if not found:
         abort(404)
-    return send_file(path)
+    return _stream_s3(f"thumb/{image_id}.jpg", "image/jpeg")
 
 
 @app.route("/detail/<int:image_id>")
@@ -190,17 +234,20 @@ def detail(image_id: int):
 
     conn = get_conn()
     try:
-        img = conn.execute("SELECT id, path FROM images WHERE id = ?", (image_id,)).fetchone()
-        if img is None:
-            abort(404)
-        tags = conn.execute(
-            "SELECT tag, category, confidence FROM tags WHERE image_id = ? ORDER BY confidence DESC",
-            (image_id,),
-        ).fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, path FROM images WHERE id = %s", (image_id,))
+            img = cur.fetchone()
+            if img is None:
+                abort(404)
+            cur.execute(
+                "SELECT tag, category, confidence FROM tags WHERE image_id = %s ORDER BY confidence DESC",
+                (image_id,),
+            )
+            tags = cur.fetchall()
     finally:
         conn.close()
 
-    def passes(t: sqlite3.Row) -> bool:
+    def passes(t) -> bool:
         return t["confidence"] >= (ct if t["category"] == "character" else gt)
 
     return render_template(
