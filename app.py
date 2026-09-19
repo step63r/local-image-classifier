@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlencode
 
 from flask import Flask, abort, render_template, request, send_file
 
@@ -43,37 +44,36 @@ def like_pattern(term: str) -> str:
     return f"%{escaped}%"
 
 
-def search_images(conn: sqlite3.Connection, tags: list[str], gt: float, ct: float, page: int):
+def search_images(
+    conn: sqlite3.Connection, tags: list[str], folder: str, gt: float, ct: float, page: int
+):
     offset = (page - 1) * PAGE_SIZE
     threshold_clause = "(category = 'character' AND confidence >= ?) OR (category != 'character' AND confidence >= ?)"
 
-    if not tags:
-        rows = conn.execute(
-            "SELECT id, path FROM images WHERE status = 'done' "
-            "ORDER BY tagged_at DESC LIMIT ? OFFSET ?",
-            (PAGE_SIZE, offset),
-        ).fetchall()
-        total = conn.execute("SELECT COUNT(*) FROM images WHERE status = 'done'").fetchone()[0]
-        return rows, total
+    conditions = ["i.status = 'done'"]
+    params: list = []
+
+    if folder:
+        conditions.append("i.path LIKE ? ESCAPE '\\'")
+        params.append(like_pattern(folder))
 
     # Each search term must match at least one tag on the image (substring,
     # not exact match) that also clears the current display threshold.
-    exists_clauses = []
-    params: list = []
     for term in tags:
-        exists_clauses.append(
+        conditions.append(
             f"""EXISTS (
                 SELECT 1 FROM tags tg
                 WHERE tg.image_id = i.id AND tg.tag LIKE ? ESCAPE '\\' AND ({threshold_clause})
             )"""
         )
         params.extend([like_pattern(term), ct, gt])
-    where = " AND ".join(exists_clauses)
+
+    where = " AND ".join(conditions)
 
     rows = conn.execute(
         f"""
         SELECT i.id, i.path FROM images i
-        WHERE i.status = 'done' AND {where}
+        WHERE {where}
         ORDER BY i.tagged_at DESC
         LIMIT ? OFFSET ?
         """,
@@ -81,7 +81,7 @@ def search_images(conn: sqlite3.Connection, tags: list[str], gt: float, ct: floa
     ).fetchall()
 
     total = conn.execute(
-        f"SELECT COUNT(*) FROM images i WHERE i.status = 'done' AND {where}",
+        f"SELECT COUNT(*) FROM images i WHERE {where}",
         params,
     ).fetchone()[0]
     return rows, total
@@ -90,19 +90,21 @@ def search_images(conn: sqlite3.Connection, tags: list[str], gt: float, ct: floa
 @app.route("/")
 def index():
     q = request.args.get("q", "").strip()
+    folder = request.args.get("folder", "").strip()
     page = max(1, request.args.get("page", 1, type=int))
     tags = parse_query(q)
     gt, ct = get_thresholds()
 
     conn = get_conn()
     try:
-        rows, total = search_images(conn, tags, gt, ct, page)
+        rows, total = search_images(conn, tags, folder, gt, ct, page)
     finally:
         conn.close()
 
     return render_template(
         "index.html",
         q=q,
+        folder=folder,
         gt=gt,
         ct=ct,
         images=rows,
@@ -131,6 +133,19 @@ def image(image_id: int):
 @app.route("/detail/<int:image_id>")
 def detail(image_id: int):
     gt, ct = get_thresholds()
+    back_params = {
+        k: v
+        for k, v in {
+            "q": request.args.get("q", ""),
+            "folder": request.args.get("folder", ""),
+            "page": request.args.get("page", ""),
+            "gt": request.args.get("gt", ""),
+            "ct": request.args.get("ct", ""),
+        }.items()
+        if v
+    }
+    back_url = "/?" + urlencode(back_params) if back_params else "/"
+
     conn = get_conn()
     try:
         img = conn.execute("SELECT id, path FROM images WHERE id = ?", (image_id,)).fetchone()
@@ -146,7 +161,9 @@ def detail(image_id: int):
     def passes(t: sqlite3.Row) -> bool:
         return t["confidence"] >= (ct if t["category"] == "character" else gt)
 
-    return render_template("detail.html", image=img, tags=tags, gt=gt, ct=ct, passes=passes)
+    return render_template(
+        "detail.html", image=img, tags=tags, gt=gt, ct=ct, passes=passes, back_url=back_url
+    )
 
 
 if __name__ == "__main__":
