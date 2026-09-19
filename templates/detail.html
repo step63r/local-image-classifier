@@ -1,37 +1,37 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" class="h-full">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image Detail</title>
-<style>
-  body { font-family: sans-serif; margin: 1.5rem; background: #111; color: #eee; }
-  a { color: #6cf; }
-  .layout { display: flex; gap: 1.5rem; flex-wrap: wrap; }
-  .layout img { max-width: 640px; max-height: 80vh; border-radius: 4px; }
-  table { border-collapse: collapse; }
-  td { padding: 2px 8px; border-bottom: 1px solid #333; }
-  .cat-character { color: #f6c; }
-  .cat-rating { color: #fc6; }
-  tr.below-threshold { opacity: 0.35; }
-  .note { color: #999; font-size: 0.85rem; }
-</style>
+<script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-  <p><a href="{{ back_url }}">&larr; 検索に戻る</a></p>
-  <div class="layout">
-    <img src="/image/{{ image['id'] }}" alt="">
-    <div>
-      <p>{{ image['path'] }}</p>
-      <p class="note">薄いタグ = 現在の閾値(general {{ gt }} / character {{ ct }})未満(保存はされているが検索対象外)</p>
-      <table>
-        {% for t in tags %}
-        <tr class="cat-{{ t['category'] }}{{ '' if passes(t) else ' below-threshold' }}">
-          <td>{{ t['tag'] }}</td>
-          <td>{{ t['category'] }}</td>
-          <td>{{ "%.3f"|format(t['confidence']) }}</td>
-        </tr>
-        {% endfor %}
-      </table>
+<body class="min-h-full bg-neutral-950 text-neutral-100">
+  <div class="mx-auto max-w-5xl px-4 py-4">
+    <a href="{{ back_url }}" class="text-sm text-sky-400 hover:underline">&larr; 検索に戻る</a>
+
+    <div class="mt-4 flex flex-col gap-4 md:flex-row">
+      <img src="/image/{{ image['id'] }}" alt=""
+        class="max-h-[80vh] w-full rounded-lg object-contain md:w-auto">
+
+      <div class="min-w-0 flex-1">
+        <p class="mb-2 break-all text-xs text-neutral-400">{{ image['path'] }}</p>
+        <p class="mb-3 text-xs text-neutral-500">
+          薄いタグ = 現在の閾値(general {{ gt }} / character {{ ct }})未満(保存はされているが検索対象外)
+        </p>
+        <table class="w-full text-sm">
+          {% for t in tags %}
+          <tr class="border-b border-neutral-800 {{ '' if passes(t) else 'opacity-30' }}">
+            <td class="py-1 pr-3 {{
+              'text-pink-400' if t['category'] == 'character'
+              else ('text-amber-400' if t['category'] == 'rating' else '')
+            }}">{{ t['tag'] }}</td>
+            <td class="py-1 pr-3 text-neutral-500">{{ t['category'] }}</td>
+            <td class="py-1 text-neutral-400">{{ "%.3f"|format(t['confidence']) }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
     </div>
   </div>
 </body>

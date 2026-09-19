@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from flask import Flask, abort, render_template, request, send_file
+from flask_httpauth import HTTPBasicAuth
+from werkzeug.security import check_password_hash, generate_password_hash
 
 DB_PATH = Path(os.environ.get("TAGS_DB", Path(__file__).parent / "tags.db"))
 PAGE_SIZE = 40
@@ -18,6 +20,26 @@ DEFAULT_GENERAL_THRESHOLD = 0.35
 DEFAULT_CHARACTER_THRESHOLD = 0.85
 
 app = Flask(__name__)
+auth = HTTPBasicAuth()
+
+AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "admin")
+_default_password_hash = generate_password_hash(os.environ.get("AUTH_PASSWORD", "changeme"))
+AUTH_PASSWORD_HASH = os.environ.get("AUTH_PASSWORD_HASH", _default_password_hash)
+
+if "AUTH_USERNAME" not in os.environ or (
+    "AUTH_PASSWORD" not in os.environ and "AUTH_PASSWORD_HASH" not in os.environ
+):
+    print(
+        "WARNING: using default auth credentials (admin/changeme). "
+        "Set AUTH_USERNAME and AUTH_PASSWORD (or AUTH_PASSWORD_HASH) before deploying.",
+    )
+
+
+@auth.verify_password
+def verify_password(username: str, password: str) -> str | None:
+    if username == AUTH_USERNAME and check_password_hash(AUTH_PASSWORD_HASH, password):
+        return username
+    return None
 
 
 def get_conn() -> sqlite3.Connection:
@@ -87,7 +109,19 @@ def search_images(
     return rows, total
 
 
+def build_url(page: int, q: str, folder: str, gt: float, ct: float) -> str:
+    params = {"page": page}
+    if q:
+        params["q"] = q
+    if folder:
+        params["folder"] = folder
+    params["gt"] = gt
+    params["ct"] = ct
+    return "/?" + urlencode(params)
+
+
 @app.route("/")
+@auth.login_required
 def index():
     q = request.args.get("q", "").strip()
     folder = request.args.get("folder", "").strip()
@@ -101,8 +135,10 @@ def index():
     finally:
         conn.close()
 
-    return render_template(
-        "index.html",
+    has_next = page * PAGE_SIZE < total
+    next_url = build_url(page + 1, q, folder, gt, ct) if has_next else None
+
+    context = dict(
         q=q,
         folder=folder,
         gt=gt,
@@ -110,12 +146,17 @@ def index():
         images=rows,
         total=total,
         page=page,
-        has_next=page * PAGE_SIZE < total,
-        has_prev=page > 1,
+        has_next=has_next,
+        next_url=next_url,
     )
+
+    if request.headers.get("HX-Request"):
+        return render_template("_grid.html", **context)
+    return render_template("index.html", **context)
 
 
 @app.route("/image/<int:image_id>")
+@auth.login_required
 def image(image_id: int):
     conn = get_conn()
     try:
@@ -131,6 +172,7 @@ def image(image_id: int):
 
 
 @app.route("/detail/<int:image_id>")
+@auth.login_required
 def detail(image_id: int):
     gt, ct = get_thresholds()
     back_params = {
