@@ -1,0 +1,10 @@
+# Versions pinned to match the already-working CUDA setup in
+# C:\Users\step6\Documents\repos\wd14-tagger-standalone\venv
+numpy==2.2.2
+Pillow==11.1.0
+opencv-python==4.11.0.86
+huggingface-hub==0.28.1
+onnxruntime==1.20.1
+onnxruntime-gpu==1.30.0
+tqdm==4.70.1
+Flask==3.1.0

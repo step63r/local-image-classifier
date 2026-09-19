@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Image Detail</title>
+<style>
+  body { font-family: sans-serif; margin: 1.5rem; background: #111; color: #eee; }
+  a { color: #6cf; }
+  .layout { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+  .layout img { max-width: 640px; max-height: 80vh; border-radius: 4px; }
+  table { border-collapse: collapse; }
+  td { padding: 2px 8px; border-bottom: 1px solid #333; }
+  .cat-character { color: #f6c; }
+  .cat-rating { color: #fc6; }
+</style>
+</head>
+<body>
+  <p><a href="/">&larr; 検索に戻る</a></p>
+  <div class="layout">
+    <img src="/image/{{ image['id'] }}" alt="">
+    <div>
+      <p>{{ image['path'] }}</p>
+      <table>
+        {% for t in tags %}
+        <tr class="cat-{{ t['category'] }}">
+          <td>{{ t['tag'] }}</td>
+          <td>{{ t['category'] }}</td>
+          <td>{{ "%.3f"|format(t['confidence']) }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</body>
+</html>
