@@ -32,8 +32,21 @@ def parse_args() -> argparse.Namespace:
         help=f"Short name ({', '.join(MODEL_REGISTRY)}) or HF repo id",
     )
     p.add_argument("--db", default=Path("tags.db"), type=Path)
-    p.add_argument("--general-threshold", type=float, default=0.35)
-    p.add_argument("--character-threshold", type=float, default=0.85)
+    p.add_argument(
+        "--general-threshold",
+        type=float,
+        default=0.1,
+        help="Storage floor for general/rating tags (default 0.1). Display/search "
+        "filtering happens later in app.py, not here -- keep this low so tuning "
+        "the real threshold doesn't require re-tagging.",
+    )
+    p.add_argument(
+        "--character-threshold",
+        type=float,
+        default=0.1,
+        help="Storage floor for character tags (default 0.1), same rationale as "
+        "--general-threshold.",
+    )
     p.add_argument("--limit", type=int, default=None, help="Process at most N files (for testing)")
     p.add_argument("--force", action="store_true", help="Reprocess even if already tagged")
     p.add_argument("--log-dir", default=Path("logs"), type=Path)

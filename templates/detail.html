@@ -12,6 +12,8 @@
   td { padding: 2px 8px; border-bottom: 1px solid #333; }
   .cat-character { color: #f6c; }
   .cat-rating { color: #fc6; }
+  tr.below-threshold { opacity: 0.35; }
+  .note { color: #999; font-size: 0.85rem; }
 </style>
 </head>
 <body>
@@ -20,9 +22,10 @@
     <img src="/image/{{ image['id'] }}" alt="">
     <div>
       <p>{{ image['path'] }}</p>
+      <p class="note">薄いタグ = 現在の閾値(general {{ gt }} / character {{ ct }})未満(保存はされているが検索対象外)</p>
       <table>
         {% for t in tags %}
-        <tr class="cat-{{ t['category'] }}">
+        <tr class="cat-{{ t['category'] }}{{ '' if passes(t) else ' below-threshold' }}">
           <td>{{ t['tag'] }}</td>
           <td>{{ t['category'] }}</td>
           <td>{{ "%.3f"|format(t['confidence']) }}</td>
