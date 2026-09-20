@@ -9,6 +9,7 @@ cache-key implications of that design.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -60,11 +61,25 @@ def get_conn() -> psycopg2.extensions.connection:
     return conn
 
 
-def parse_query(q: str) -> list[str]:
-    # Tags are separated by whitespace; a multi-word tag itself (e.g. from
-    # "azur lane") is written with underscores, as on booru-style tag search
-    # boxes, and normalized here to match the space form stored in the DB.
-    return [t.replace("_", " ").strip() for t in q.replace(",", " ").split() if t.strip()]
+def parse_query(q: str) -> list[tuple[str, bool]]:
+    # Tags are separated by whitespace/commas; a multi-word tag itself (e.g.
+    # from "azur lane") is written with underscores, as on booru-style tag
+    # search boxes, and normalized here to match the space form stored in
+    # the DB. A "double quoted phrase" is kept intact (spaces as typed) and
+    # flagged for exact match, since a substring match on a tag containing
+    # spaces would also match unrelated tags that merely contain one of the
+    # words.
+    terms: list[tuple[str, bool]] = []
+    for quoted, unquoted in re.findall(r'"([^"]*)"|(\S+)', q):
+        if quoted:
+            term = quoted.strip()
+            if term:
+                terms.append((term, True))
+        else:
+            for t in unquoted.replace(",", " ").split():
+                if t.strip():
+                    terms.append((t.replace("_", " ").strip(), False))
+    return terms
 
 
 def _float_arg(name: str, absent_default: float, empty_default: float) -> float:
@@ -101,7 +116,7 @@ def like_pattern(term: str) -> str:
 
 def search_images(
     conn: psycopg2.extensions.connection,
-    tags: list[str],
+    tags: list[tuple[str, bool]],
     folder: str,
     gt_min: float,
     gt_max: float,
@@ -133,16 +148,18 @@ def search_images(
         )
         params.extend(SENSITIVE_RATINGS)
 
-    # Each search term must match at least one tag on the image (substring,
-    # not exact match) that also falls within the current display range.
-    for term in tags:
+    # Each search term must match at least one tag on the image that also
+    # falls within the current display range. Unquoted terms match by
+    # substring; a "quoted phrase" requires an exact tag match instead.
+    for term, exact in tags:
+        tag_clause = "tg.tag = %s" if exact else "tg.tag LIKE %s ESCAPE '\\'"
         conditions.append(
             f"""EXISTS (
                 SELECT 1 FROM tags tg
-                WHERE tg.image_id = i.id AND tg.tag LIKE %s ESCAPE '\\' AND ({threshold_clause})
+                WHERE tg.image_id = i.id AND {tag_clause} AND ({threshold_clause})
             )"""
         )
-        params.extend([like_pattern(term), ct_min, ct_max, gt_min, gt_max])
+        params.extend([term if exact else like_pattern(term), ct_min, ct_max, gt_min, gt_max])
 
     where = " AND ".join(conditions)
 
