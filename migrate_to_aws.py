@@ -34,7 +34,7 @@ from tqdm import tqdm
 
 PG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS images (
-    id INTEGER PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
     size BIGINT NOT NULL,
     mtime DOUBLE PRECISION NOT NULL,
