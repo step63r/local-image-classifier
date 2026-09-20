@@ -17,7 +17,7 @@
       <div class="min-w-0 flex-1">
         <p class="mb-2 break-all text-xs text-neutral-400">{{ image['path'] }}</p>
         <p class="mb-3 text-xs text-neutral-500">
-          薄いタグ = 現在の閾値(general {{ gt }} / character {{ ct }})未満(保存はされているが検索対象外)
+          薄いタグ = 現在の範囲(general {{ gt_min }}〜{{ gt_max }} / character {{ ct_min }}〜{{ ct_max }})外(保存はされているが検索対象外)
         </p>
         <table class="w-full text-sm">
           {% for t in tags %}

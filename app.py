@@ -25,9 +25,10 @@ S3_BUCKET = os.environ["S3_BUCKET"]
 PAGE_SIZE = 40
 
 # batch_tag.py stores tags down to a low floor (default 0.1) so these display
-# thresholds can be tuned here, at query time, without re-running inference.
-DEFAULT_GENERAL_THRESHOLD = 0.35
-DEFAULT_CHARACTER_THRESHOLD = 0.85
+# ranges can be tuned here, at query time, without re-running inference.
+DEFAULT_GENERAL_MIN = 0.3
+DEFAULT_CHARACTER_MIN = 0.85
+SENSITIVE_RATINGS = ("sensitive", "questionable", "explicit")
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
@@ -66,10 +67,31 @@ def parse_query(q: str) -> list[str]:
     return [t.replace("_", " ").strip() for t in q.replace(",", " ").split() if t.strip()]
 
 
-def get_thresholds() -> tuple[float, float]:
-    gt = request.args.get("gt", DEFAULT_GENERAL_THRESHOLD, type=float)
-    ct = request.args.get("ct", DEFAULT_CHARACTER_THRESHOLD, type=float)
-    return gt, ct
+def _float_arg(name: str, absent_default: float, empty_default: float) -> float:
+    # Distinguishes "param not in the querystring" (fresh page load -> use
+    # the friendly default) from "param present but cleared by the user"
+    # (explicit request for an open-ended bound).
+    if name not in request.args:
+        return absent_default
+    raw = request.args.get(name, "").strip()
+    if raw == "":
+        return empty_default
+    try:
+        return float(raw)
+    except ValueError:
+        return absent_default
+
+
+def get_thresholds() -> tuple[float, float, float, float]:
+    gt_min = _float_arg("gt_min", DEFAULT_GENERAL_MIN, 0.0)
+    gt_max = _float_arg("gt_max", 1.0, 1.0)
+    ct_min = _float_arg("ct_min", DEFAULT_CHARACTER_MIN, 0.0)
+    ct_max = _float_arg("ct_max", 1.0, 1.0)
+    return gt_min, gt_max, ct_min, ct_max
+
+
+def get_exclude_sensitive() -> bool:
+    return request.args.get("exclude_sensitive") == "1"
 
 
 def like_pattern(term: str) -> str:
@@ -78,10 +100,21 @@ def like_pattern(term: str) -> str:
 
 
 def search_images(
-    conn: psycopg2.extensions.connection, tags: list[str], folder: str, gt: float, ct: float, page: int
+    conn: psycopg2.extensions.connection,
+    tags: list[str],
+    folder: str,
+    gt_min: float,
+    gt_max: float,
+    ct_min: float,
+    ct_max: float,
+    exclude_sensitive: bool,
+    page: int,
 ):
     offset = (page - 1) * PAGE_SIZE
-    threshold_clause = "(category = 'character' AND confidence >= %s) OR (category != 'character' AND confidence >= %s)"
+    threshold_clause = (
+        "(category = 'character' AND confidence BETWEEN %s AND %s) "
+        "OR (category != 'character' AND confidence BETWEEN %s AND %s)"
+    )
 
     conditions = ["i.status = 'done'"]
     params: list = []
@@ -90,8 +123,18 @@ def search_images(
         conditions.append("i.path LIKE %s ESCAPE '\\'")
         params.append(like_pattern(folder))
 
+    if exclude_sensitive:
+        placeholders = ", ".join(["%s"] * len(SENSITIVE_RATINGS))
+        conditions.append(
+            f"""NOT EXISTS (
+                SELECT 1 FROM tags tg
+                WHERE tg.image_id = i.id AND tg.category = 'rating' AND tg.tag IN ({placeholders})
+            )"""
+        )
+        params.extend(SENSITIVE_RATINGS)
+
     # Each search term must match at least one tag on the image (substring,
-    # not exact match) that also clears the current display threshold.
+    # not exact match) that also falls within the current display range.
     for term in tags:
         conditions.append(
             f"""EXISTS (
@@ -99,7 +142,7 @@ def search_images(
                 WHERE tg.image_id = i.id AND tg.tag LIKE %s ESCAPE '\\' AND ({threshold_clause})
             )"""
         )
-        params.extend([like_pattern(term), ct, gt])
+        params.extend([like_pattern(term), ct_min, ct_max, gt_min, gt_max])
 
     where = " AND ".join(conditions)
 
@@ -121,14 +164,27 @@ def search_images(
     return rows, total
 
 
-def build_url(page: int, q: str, folder: str, gt: float, ct: float) -> str:
+def build_url(
+    page: int,
+    q: str,
+    folder: str,
+    gt_min: float,
+    gt_max: float,
+    ct_min: float,
+    ct_max: float,
+    exclude_sensitive: bool,
+) -> str:
     params = {"page": page}
     if q:
         params["q"] = q
     if folder:
         params["folder"] = folder
-    params["gt"] = gt
-    params["ct"] = ct
+    params["gt_min"] = gt_min
+    params["gt_max"] = gt_max
+    params["ct_min"] = ct_min
+    params["ct_max"] = ct_max
+    if exclude_sensitive:
+        params["exclude_sensitive"] = "1"
     return "/?" + urlencode(params)
 
 
@@ -139,22 +195,32 @@ def index():
     folder = request.args.get("folder", "").strip()
     page = max(1, request.args.get("page", 1, type=int))
     tags = parse_query(q)
-    gt, ct = get_thresholds()
+    gt_min, gt_max, ct_min, ct_max = get_thresholds()
+    exclude_sensitive = get_exclude_sensitive()
 
     conn = get_conn()
     try:
-        rows, total = search_images(conn, tags, folder, gt, ct, page)
+        rows, total = search_images(
+            conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, page
+        )
     finally:
         conn.close()
 
     has_next = page * PAGE_SIZE < total
-    next_url = build_url(page + 1, q, folder, gt, ct) if has_next else None
+    next_url = (
+        build_url(page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+        if has_next
+        else None
+    )
 
     context = dict(
         q=q,
         folder=folder,
-        gt=gt,
-        ct=ct,
+        gt_min=gt_min,
+        gt_max=gt_max,
+        ct_min=ct_min,
+        ct_max=ct_max,
+        exclude_sensitive=exclude_sensitive,
         images=rows,
         total=total,
         page=page,
@@ -218,15 +284,18 @@ def thumb(image_id: int):
 @app.route("/detail/<int:image_id>")
 @auth.login_required
 def detail(image_id: int):
-    gt, ct = get_thresholds()
+    gt_min, gt_max, ct_min, ct_max = get_thresholds()
     back_params = {
         k: v
         for k, v in {
             "q": request.args.get("q", ""),
             "folder": request.args.get("folder", ""),
             "page": request.args.get("page", ""),
-            "gt": request.args.get("gt", ""),
-            "ct": request.args.get("ct", ""),
+            "gt_min": request.args.get("gt_min", ""),
+            "gt_max": request.args.get("gt_max", ""),
+            "ct_min": request.args.get("ct_min", ""),
+            "ct_max": request.args.get("ct_max", ""),
+            "exclude_sensitive": request.args.get("exclude_sensitive", ""),
         }.items()
         if v
     }
@@ -248,10 +317,19 @@ def detail(image_id: int):
         conn.close()
 
     def passes(t) -> bool:
-        return t["confidence"] >= (ct if t["category"] == "character" else gt)
+        lo, hi = (ct_min, ct_max) if t["category"] == "character" else (gt_min, gt_max)
+        return lo <= t["confidence"] <= hi
 
     return render_template(
-        "detail.html", image=img, tags=tags, gt=gt, ct=ct, passes=passes, back_url=back_url
+        "detail.html",
+        image=img,
+        tags=tags,
+        gt_min=gt_min,
+        gt_max=gt_max,
+        ct_min=ct_min,
+        ct_max=ct_max,
+        passes=passes,
+        back_url=back_url,
     )
 
 

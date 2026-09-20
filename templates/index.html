@@ -9,30 +9,52 @@
 </head>
 <body class="min-h-full bg-neutral-950 text-neutral-100">
   <header class="sticky top-0 z-10 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
-    <div class="mx-auto max-w-6xl px-4 py-3">
-      <h1 class="mb-2 text-lg font-semibold">Image Tag Search</h1>
-      <form method="get" action="/" class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        <input type="text" name="q" value="{{ q }}"
-          placeholder="タグをスペース区切りでAND検索 (部分一致OK)"
-          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm sm:w-72">
-        <input type="text" name="folder" value="{{ folder }}"
-          placeholder="フォルダで絞り込み"
-          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm sm:w-56">
-        <div class="flex items-center gap-3 text-xs text-neutral-400">
-          <label class="flex items-center gap-1">general
-            <input type="number" name="gt" value="{{ gt }}" step="0.05" min="0" max="1"
+    <div class="mx-auto max-w-6xl px-4 py-2 sm:py-3">
+      <div class="flex items-center justify-between gap-2 sm:mb-2">
+        <h1 class="text-base font-semibold sm:text-lg">Image Tag Search</h1>
+        <p class="text-xs text-neutral-500">{{ total }} 件</p>
+      </div>
+      <form method="get" action="/" class="mt-2 flex flex-col gap-2">
+        <div class="flex gap-2">
+          <input type="text" name="q" value="{{ q }}"
+            placeholder="タグをスペース区切りでAND検索 (部分一致OK)"
+            class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm">
+          <button type="submit" class="shrink-0 rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500">
+            検索
+          </button>
+          <button type="button"
+            onclick="var p=document.getElementById('filters-panel'); p.classList.toggle('hidden'); p.classList.toggle('flex');"
+            class="shrink-0 rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300">
+            詳細
+          </button>
+        </div>
+        <div id="filters-panel" class="hidden flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+          <input type="text" name="folder" value="{{ folder }}"
+            placeholder="フォルダで絞り込み"
+            class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm sm:w-56">
+          <div class="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
+            <span>general</span>
+            <input type="number" name="gt_min" value="{{ gt_min }}" step="0.05" min="0" max="1"
               class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
-          </label>
-          <label class="flex items-center gap-1">character
-            <input type="number" name="ct" value="{{ ct }}" step="0.05" min="0" max="1"
+            <span>~</span>
+            <input type="number" name="gt_max" value="{{ gt_max }}" step="0.05" min="0" max="1"
               class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+          </div>
+          <div class="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
+            <span>character</span>
+            <input type="number" name="ct_min" value="{{ ct_min }}" step="0.05" min="0" max="1"
+              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+            <span>~</span>
+            <input type="number" name="ct_max" value="{{ ct_max }}" step="0.05" min="0" max="1"
+              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+          </div>
+          <label class="flex items-center gap-1 text-xs text-neutral-400">
+            <input type="checkbox" name="exclude_sensitive" value="1" {{ 'checked' if exclude_sensitive else '' }}
+              class="rounded border-neutral-700 bg-neutral-900">
+            exclude sensitive
           </label>
         </div>
-        <button type="submit" class="rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500">
-          検索
-        </button>
       </form>
-      <p class="mt-1 text-xs text-neutral-500">{{ total }} 件</p>
     </div>
   </header>
 
