@@ -2,9 +2,12 @@
 """Resumable migration: local tags.db (SQLite) -> S3 (originals+thumbnails) + Postgres.
 
 Run locally (this machine has the E: drive and tags.db). PostgreSQL on the EC2
-instance only listens on localhost, so open an SSH tunnel first:
+instance only listens on localhost, and there is no SSH access (Session
+Manager only), so open an SSM port-forward tunnel first:
 
-    ssh -L 5433:localhost:5432 ec2-user@<EIP> -i infra/keys/local-image-classifier-key.pem -N
+    aws ssm start-session --target <InstanceId> `
+      --document-name AWS-StartPortForwardingSession `
+      --parameters '{"portNumber":["5432"],"localPortNumber":["5433"]}'
 
 then, in another terminal:
 
@@ -13,6 +16,11 @@ then, in another terminal:
 
 Re-running the same command resumes automatically: any image_id already
 present in Postgres is skipped without touching S3 again.
+
+Incremental updates: after adding images locally, first re-run batch_tag.py
+against the E: drive (it skips files already tagged), then re-run this
+script the same way. Files deleted or moved locally are not detected or
+cleaned up; stale rows are left in place.
 """
 from __future__ import annotations
 
