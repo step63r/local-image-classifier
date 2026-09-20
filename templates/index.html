@@ -47,6 +47,10 @@
             class="shrink-0 rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300">
             詳細
           </button>
+          <a id="reset-link" href="/"
+            class="hidden shrink-0 rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-800">
+            リセット
+          </a>
         </div>
         <div id="filters-panel" class="hidden flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
           <input type="text" name="folder" value="{{ folder }}"
@@ -71,6 +75,12 @@
           <label class="flex items-center gap-1 text-xs text-neutral-400">
             <input type="checkbox" name="exclude_sensitive" value="1" {{ 'checked' if exclude_sensitive else '' }}
               class="rounded border-neutral-700 bg-neutral-900">
+            <!-- Unchecked checkboxes submit nothing at all, so a plain "0"
+                 fallback would be indistinguishable from a fresh page load
+                 (no exclude_sensitive param at all). Placed after the
+                 checkbox so that when checked, its "1" wins as the first
+                 value Flask sees for this name. -->
+            <input type="hidden" name="exclude_sensitive" value="0">
             exclude sensitive
           </label>
         </div>
@@ -83,5 +93,44 @@
       {% include "_grid.html" %}
     </div>
   </main>
+
+  <script>
+    (function () {
+      var defaults = {{ defaults | tojson }};
+      var form = document.querySelector('form');
+      var resetLink = document.getElementById('reset-link');
+
+      var qInput = form.elements['q'];
+      var folderInput = form.elements['folder'];
+      var gtMinInput = form.elements['gt_min'];
+      var gtMaxInput = form.elements['gt_max'];
+      var ctMinInput = form.elements['ct_min'];
+      var ctMaxInput = form.elements['ct_max'];
+      var exclCheckbox = form.querySelector('input[type=checkbox][name=exclude_sensitive]');
+
+      function isModified() {
+        if (qInput.value.trim() !== '') return true;
+        if (folderInput.value.trim() !== '') return true;
+        if (parseFloat(gtMinInput.value) !== defaults.gt_min) return true;
+        if (parseFloat(gtMaxInput.value) !== defaults.gt_max) return true;
+        if (parseFloat(ctMinInput.value) !== defaults.ct_min) return true;
+        if (parseFloat(ctMaxInput.value) !== defaults.ct_max) return true;
+        if (exclCheckbox.checked !== defaults.exclude_sensitive) return true;
+        return false;
+      }
+
+      function updateResetVisibility() {
+        resetLink.classList.toggle('hidden', !isModified());
+      }
+
+      [qInput, folderInput, gtMinInput, gtMaxInput, ctMinInput, ctMaxInput, exclCheckbox]
+        .forEach(function (el) {
+          el.addEventListener('input', updateResetVisibility);
+          el.addEventListener('change', updateResetVisibility);
+        });
+
+      updateResetVisibility();
+    })();
+  </script>
 </body>
 </html>

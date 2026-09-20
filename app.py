@@ -106,6 +106,12 @@ def get_thresholds() -> tuple[float, float, float, float]:
 
 
 def get_exclude_sensitive() -> bool:
+    # Defaults to on for a fresh page load. Once the form has been submitted
+    # (or a link built by this app has been followed), the param is always
+    # present as "1"/"0" -- see the hidden-field trick in index.html -- so an
+    # explicit uncheck is distinguishable from "never set".
+    if "exclude_sensitive" not in request.args:
+        return True
     return request.args.get("exclude_sensitive") == "1"
 
 
@@ -200,8 +206,10 @@ def build_url(
     params["gt_max"] = gt_max
     params["ct_min"] = ct_min
     params["ct_max"] = ct_max
-    if exclude_sensitive:
-        params["exclude_sensitive"] = "1"
+    # Always explicit (never omitted) so downstream requests (pagination,
+    # detail back-link) don't fall back to the "absent" default -- see
+    # get_exclude_sensitive().
+    params["exclude_sensitive"] = "1" if exclude_sensitive else "0"
     return "/?" + urlencode(params)
 
 
@@ -243,6 +251,13 @@ def index():
         page=page,
         has_next=has_next,
         next_url=next_url,
+        defaults={
+            "gt_min": DEFAULT_GENERAL_MIN,
+            "gt_max": 1.0,
+            "ct_min": DEFAULT_CHARACTER_MIN,
+            "ct_max": 1.0,
+            "exclude_sensitive": True,
+        },
     )
 
     if request.headers.get("HX-Request"):
