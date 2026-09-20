@@ -221,6 +221,16 @@ def main() -> None:
         rows = rows[: args.limit]
     logging.info("Found %d rows to migrate (already-migrated rows will be skipped)", len(rows))
 
+    # Fetched once up front instead of one SELECT per row: on a re-run where
+    # most/all rows are already migrated, checking membership in this set is
+    # a single round trip total instead of one per row (the latter took
+    # 15-30+ minutes of pure tunnel round-trip latency on ~44k rows with
+    # nothing new to do).
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT id FROM images")
+        migrated_ids = {r["id"] for r in cur.fetchall()}
+    logging.info("%d rows already present in Postgres", len(migrated_ids))
+
     done = skipped = errors = 0
     pending_commits = 0
     start = time.monotonic()
@@ -230,10 +240,7 @@ def main() -> None:
             for row in bar:
                 bar.set_postfix(done=done, skipped=skipped, errors=errors)
 
-                with pg_conn.cursor() as cur:
-                    cur.execute("SELECT 1 FROM images WHERE id = %s", (row["id"],))
-                    already_migrated = cur.fetchone() is not None
-                if already_migrated:
+                if row["id"] in migrated_ids:
                     skipped += 1
                     continue
 
