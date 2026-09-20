@@ -317,6 +317,15 @@ def thumb(image_id: int):
 @auth.login_required
 def detail(image_id: int):
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
+    folder = request.args.get("folder", "").strip()
+    exclude_sensitive = get_exclude_sensitive()
+
+    def tag_url(tag: str) -> str:
+        # Quoted so parse_query() treats it as an exact-match term rather
+        # than a substring search -- clicking a tag should search for that
+        # exact tag, not any tag containing it as a substring.
+        return build_url(1, f'"{tag}"', folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+
     back_params = {
         k: v
         for k, v in {
@@ -362,6 +371,7 @@ def detail(image_id: int):
         ct_max=ct_max,
         passes=passes,
         back_url=back_url,
+        tag_url=tag_url,
     )
 
 

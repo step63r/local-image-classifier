@@ -64,7 +64,7 @@
             <td class="py-1 pr-3 {{
               'text-pink-400' if t['category'] == 'character'
               else ('text-amber-400' if t['category'] == 'rating' else '')
-            }}">{{ t['tag'] }}</td>
+            }}"><a href="{{ tag_url(t['tag']) }}" class="hover:underline">{{ t['tag'] }}</a></td>
             <td class="py-1 pr-3 text-neutral-500">{{ t['category'] }}</td>
             <td class="py-1 text-neutral-400">{{ "%.3f"|format(t['confidence']) }}</td>
           </tr>
