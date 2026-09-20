@@ -5,13 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image Detail</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* 横長画像で説明欄が全体幅の1/3未満になる場合、モバイルと同様に縦積みに強制する */
+  #detailRow.force-stack { flex-direction: column !important; }
+  #detailRow.force-stack #detailImg { width: 100% !important; }
+</style>
 </head>
 <body class="min-h-full bg-neutral-950 text-neutral-100">
   <div class="mx-auto max-w-5xl px-4 py-4">
     <a href="{{ back_url }}" class="text-sm text-sky-400 hover:underline">&larr; 検索に戻る</a>
 
-    <div class="mt-4 flex flex-col gap-4 md:flex-row">
-      <img src="/image/{{ image['id'] }}" alt=""
+    <div id="detailRow" class="mt-4 flex flex-col gap-4 md:flex-row">
+      <img id="detailImg" src="/image/{{ image['id'] }}" alt=""
         class="max-h-[80vh] w-full rounded-lg object-contain md:w-auto">
 
       <div class="min-w-0 flex-1">
@@ -34,5 +39,43 @@
       </div>
     </div>
   </div>
+
+  <script>
+    (function () {
+      var row = document.getElementById('detailRow');
+      var img = document.getElementById('detailImg');
+      var GAP_PX = 16; // gap-4
+
+      function updateLayout() {
+        if (!window.matchMedia('(min-width: 768px)').matches) {
+          row.classList.remove('force-stack');
+          return;
+        }
+        if (!img.naturalWidth || !img.naturalHeight) return;
+
+        var rowWidth = row.clientWidth;
+        var maxHeightPx = window.innerHeight * 0.8; // max-h-[80vh]
+        var ratio = img.naturalWidth / img.naturalHeight;
+        var imgWidth = Math.min(ratio * maxHeightPx, rowWidth);
+        var descWidth = rowWidth - imgWidth - GAP_PX;
+
+        row.classList.toggle('force-stack', descWidth < rowWidth / 3);
+      }
+
+      var scheduled = false;
+      function scheduleUpdate() {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(function () {
+          scheduled = false;
+          updateLayout();
+        });
+      }
+
+      img.addEventListener('load', updateLayout);
+      window.addEventListener('resize', scheduleUpdate);
+      if (img.complete) updateLayout();
+    })();
+  </script>
 </body>
 </html>
