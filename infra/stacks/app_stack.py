@@ -24,6 +24,7 @@ class AppStack(Stack):
         auth_username: str,
         auth_password: str,
         certificate: acm.ICertificate,
+        web_acl_arn: str,
         cloudfront_prefix_list_id: str,
         **kwargs,
     ) -> None:
@@ -208,6 +209,7 @@ class AppStack(Stack):
             domain_names=[domain_name],
             certificate=certificate,
             price_class=cloudfront.PriceClass.PRICE_CLASS_200,
+            web_acl_id=web_acl_arn,
         )
 
         CfnOutput(self, "InstanceId", value=instance.instance_id)
