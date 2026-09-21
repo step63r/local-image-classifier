@@ -99,6 +99,41 @@ python migrate_to_aws.py --s3-bucket <MediaBucketName>
 
 中断しても同じコマンドで再開可能。
 
+## 4.5. 関連画像(embedding)のバックフィル
+
+詳細画面の「関連画像」表示に使うembeddingを、既存の44,242件分だけ一度きり後付けする。
+新規にタグ付け・移行する画像は`batch_tag.py`/`migrate_to_aws.py`が自動で処理するので、
+この節は初回移行時のみでよい。
+
+まずローカルで(長時間・再開可能、まず`--limit 20`推奨):
+
+```powershell
+python backfill_embeddings.py --limit 20
+python backfill_embeddings.py
+```
+
+完了したら、`migrate_to_aws.py`を(スキーマ変更を反映するため)一度実行してから、
+同じSSMトンネル越しに本番へ反映する。**この順序が重要**(`embedding`列が無い状態で
+`push_embeddings.py`を実行するとエラーで停止する):
+
+```powershell
+python migrate_to_aws.py --s3-bucket <MediaBucketName> --limit 1
+$env:PGPASSWORD = "<インスタンス上の /opt/imageapp/app.env の DATABASE_URL から確認>"
+python push_embeddings.py --limit 20
+python push_embeddings.py
+```
+
+ベクトルインデックス(HNSW)は自動化していない。EC2は`t4g.micro`(1GB RAM)で
+`maintenance_work_mem`も32MBに絞ってあり、44,242件×1024次元のインデックス構築は
+重い可能性があるため。個人利用規模なら未インデックスの逐次スキャンで十分速いはずで、
+体感で遅ければSSMトンネル越しのpsqlで手動で張る:
+
+```sql
+SET maintenance_work_mem = '128MB';  -- セッションローカルのみ、ALTER SYSTEMはしない
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_images_embedding_hnsw
+  ON images USING hnsw (embedding vector_cosine_ops);
+```
+
 ## 5. アプリのデプロイ
 
 SSH/scpは使わず、S3経由でコードを配ってSSM Run Commandでサービスを再起動する:

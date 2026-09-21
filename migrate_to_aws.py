@@ -35,12 +35,16 @@ from pathlib import Path
 
 import boto3
 import botocore.exceptions
+import numpy as np
 import psycopg2
 import psycopg2.extras
+from pgvector.psycopg2 import register_vector
 from PIL import Image
 from tqdm import tqdm
 
 PG_SCHEMA = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS images (
     id SERIAL PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
@@ -51,6 +55,15 @@ CREATE TABLE IF NOT EXISTS images (
     error TEXT,
     tagged_at TEXT NOT NULL
 );
+
+-- ALTER (rather than inlining into the CREATE TABLE above) so this is the
+-- one code path that's correct both for a fresh deploy and for the
+-- already-populated prod table -- see push_embeddings.py for backfilling
+-- rows migrated before this column existed. Deliberately no vector index
+-- here: ensure_schema() runs on every invocation of this script, including
+-- routine --limit smoke tests, and an HNSW build is expensive DDL that must
+-- never fire from a routine, frequently re-run code path (see infra/README.md).
+ALTER TABLE images ADD COLUMN IF NOT EXISTS embedding vector(1024);
 
 CREATE TABLE IF NOT EXISTS tags (
     image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
@@ -155,12 +168,16 @@ def migrate_one(sqlite_conn, pg_conn, s3, bucket: str, row, thumb_size: int, thu
     tags = sqlite_conn.execute(
         "SELECT tag, category, confidence FROM tags WHERE image_id = ?", (image_id,)
     ).fetchall()
+    embedding_row = sqlite_conn.execute(
+        "SELECT vector FROM embeddings WHERE image_id = ?", (image_id,)
+    ).fetchone()
+    embedding = np.frombuffer(embedding_row["vector"], dtype=np.float32) if embedding_row is not None else None
 
     with pg_conn.cursor() as cur:
         cur.execute("DELETE FROM images WHERE id = %s", (image_id,))
         cur.execute(
-            "INSERT INTO images (id, path, size, mtime, model, status, error, tagged_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO images (id, path, size, mtime, model, status, error, tagged_at, embedding) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 image_id,
                 row["path"],
@@ -170,6 +187,7 @@ def migrate_one(sqlite_conn, pg_conn, s3, bucket: str, row, thumb_size: int, thu
                 row["status"],
                 row["error"],
                 row["tagged_at"],
+                embedding,
             ),
         )
         psycopg2.extras.execute_values(
@@ -209,6 +227,7 @@ def main() -> None:
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
     ensure_schema(pg_conn)
+    register_vector(pg_conn)  # after ensure_schema(): needs the vector extension/type to already exist
 
     session = boto3.Session(profile_name=args.aws_profile) if args.aws_profile else boto3.Session()
     s3 = session.client("s3", region_name=args.region)

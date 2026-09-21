@@ -187,6 +187,20 @@ def search_images(
     return rows, total
 
 
+def get_related_images(cur, image_id: int, limit: int = 12):
+    # Only called when the source image has an embedding (see detail()) --
+    # otherwise the subquery below returns NULL and `ORDER BY NULL` would
+    # hand back an arbitrary, not actually related, set of rows.
+    cur.execute(
+        "SELECT id, path FROM images "
+        "WHERE id != %s AND embedding IS NOT NULL "
+        "ORDER BY embedding <=> (SELECT embedding FROM images WHERE id = %s) "
+        "LIMIT %s",
+        (image_id, image_id, limit),
+    )
+    return cur.fetchall()
+
+
 def build_url(
     page: int,
     q: str,
@@ -345,7 +359,10 @@ def detail(image_id: int):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, path FROM images WHERE id = %s", (image_id,))
+            cur.execute(
+                "SELECT id, path, (embedding IS NOT NULL) AS has_embedding FROM images WHERE id = %s",
+                (image_id,),
+            )
             img = cur.fetchone()
             if img is None:
                 abort(404)
@@ -354,6 +371,7 @@ def detail(image_id: int):
                 (image_id,),
             )
             tags = cur.fetchall()
+            related = get_related_images(cur, image_id) if img["has_embedding"] else []
     finally:
         conn.close()
 
@@ -365,6 +383,7 @@ def detail(image_id: int):
         "detail.html",
         image=img,
         tags=tags,
+        related=related,
         gt_min=gt_min,
         gt_max=gt_max,
         ct_min=ct_min,

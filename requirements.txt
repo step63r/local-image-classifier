@@ -4,12 +4,14 @@ numpy==2.2.2
 Pillow==11.1.0
 opencv-python==4.11.0.86
 huggingface-hub==0.28.1
+onnx==1.17.0
 onnxruntime==1.20.1
 onnxruntime-gpu==1.30.0
 tqdm==4.70.1
 Flask==3.1.0
 Flask-HTTPAuth==4.8.0
 
-# For migrate_to_aws.py (runs locally, not on the server -- see requirements-server.txt)
+# For migrate_to_aws.py / push_embeddings.py (run locally, not on the server -- see requirements-server.txt)
 boto3==1.35.99
 psycopg2-binary==2.9.10
+pgvector==0.3.6

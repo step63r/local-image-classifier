@@ -134,7 +134,7 @@ def main() -> None:
                 try:
                     with Image.open(path) as im:
                         im.load()
-                        raw_tags = tagger.infer(im)
+                        result = tagger.infer(im)
                 except Exception as e:
                     logging.error("Failed to tag %s: %s", path, e)
                     database.save_error(
@@ -142,10 +142,12 @@ def main() -> None:
                     )
                     errors += 1
                 else:
-                    selected = select_tags(raw_tags, args.general_threshold, args.character_threshold)
-                    database.save_result(
+                    selected = select_tags(result.tags, args.general_threshold, args.character_threshold)
+                    image_id = database.save_result(
                         conn, abs_path, stat.st_size, stat.st_mtime, args.model, selected, tagged_at
                     )
+                    if result.embedding is not None:
+                        database.save_embedding(conn, image_id, args.model, result.embedding)
                     done += 1
 
                 pending_commits += 1
