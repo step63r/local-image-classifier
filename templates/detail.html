@@ -75,7 +75,7 @@
         </p>
         <table class="w-full text-sm">
           {% for t in tags %}
-          <tr class="border-b border-neutral-800 {{ '' if passes(t) else 'opacity-30' }}">
+          <tr class="border-b border-neutral-800 {{ '' if passes(t) else 'tag-extra hidden opacity-30' }}">
             <td class="py-1 pr-3 {{
               'text-pink-400' if t['category'] == 'character'
               else ('text-amber-400' if t['category'] == 'rating' else '')
@@ -84,6 +84,14 @@
             <td class="py-1 text-neutral-400">{{ "%.3f"|format(t['confidence']) }}</td>
           </tr>
           {% endfor %}
+          {% if has_extra_tags %}
+          <tr>
+            <td colspan="3" class="pt-2 text-center">
+              <button type="button" id="tagToggleBtn" data-expanded="false"
+                class="text-xs text-sky-400 hover:underline">&#9660; もっと見る</button>
+            </td>
+          </tr>
+          {% endif %}
         </table>
       </div>
     </div>
@@ -104,6 +112,20 @@
   </div>
 
   <script>
+    (function () {
+      var tagToggleBtn = document.getElementById('tagToggleBtn');
+      if (tagToggleBtn) {
+        tagToggleBtn.addEventListener('click', function () {
+          var expanded = tagToggleBtn.dataset.expanded === 'true';
+          document.querySelectorAll('.tag-extra').forEach(function (el) {
+            el.classList.toggle('hidden', expanded);
+          });
+          tagToggleBtn.dataset.expanded = String(!expanded);
+          tagToggleBtn.innerHTML = expanded ? '&#9660; もっと見る' : '&#9650; 閉じる';
+        });
+      }
+    })();
+
     (function () {
       var row = document.getElementById('detailRow');
       var img = document.getElementById('detailImg');

@@ -379,6 +379,8 @@ def detail(image_id: int):
         lo, hi = (ct_min, ct_max) if t["category"] == "character" else (gt_min, gt_max)
         return lo <= t["confidence"] <= hi
 
+    has_extra_tags = any(not passes(t) for t in tags)
+
     return render_template(
         "detail.html",
         image=img,
@@ -389,6 +391,7 @@ def detail(image_id: int):
         ct_min=ct_min,
         ct_max=ct_max,
         passes=passes,
+        has_extra_tags=has_extra_tags,
         back_url=back_url,
         tag_url=tag_url,
     )
