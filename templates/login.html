@@ -12,23 +12,40 @@
     {% if error %}
       <p class="mb-4 rounded border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-400">{{ error }}</p>
     {% endif %}
-    <form method="post" action="/login" class="flex flex-col gap-3">
+    <form id="loginForm" method="post" action="/login" class="flex flex-col gap-3">
       <input type="hidden" name="next" value="{{ next }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div>
         <label class="mb-1 block text-xs text-neutral-400" for="username">ユーザー名</label>
+        <!-- text-base (16px): iOS Safariはフォーカス時のfont-sizeが16px未満だと
+             ページ全体を自動ズームしてしまうため、text-smより小さくしない。 -->
         <input type="text" id="username" name="username" autocomplete="username" autofocus
-          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm">
+          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:text-sm">
       </div>
       <div>
         <label class="mb-1 block text-xs text-neutral-400" for="password">パスワード</label>
         <input type="password" id="password" name="password" autocomplete="current-password"
-          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm">
+          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:text-sm">
       </div>
-      <button type="submit" class="mt-2 rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500">
-        ログイン
+      <button type="submit" id="loginButton"
+        class="mt-2 flex items-center justify-center gap-2 rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-70">
+        <svg id="loginSpinner" class="hidden h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+        </svg>
+        <span id="loginButtonLabel">ログイン</span>
       </button>
     </form>
   </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', function () {
+      // ページ遷移(成功時のリダイレクト、または失敗時の再レンダリング)で
+      // 自然に解除されるので、明示的に元に戻す処理は不要。
+      document.getElementById('loginButton').disabled = true;
+      document.getElementById('loginSpinner').classList.remove('hidden');
+      document.getElementById('loginButtonLabel').textContent = 'ログイン中...';
+    });
+  </script>
 </body>
 </html>

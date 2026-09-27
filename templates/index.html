@@ -39,9 +39,11 @@
       </div>
       <form method="get" action="/" class="mt-2 flex flex-col gap-2">
         <div class="flex gap-2">
+          <!-- text-base (16px): iOS Safariはフォーカス時のfont-sizeが16px未満だと
+               ページ全体を自動ズームしてしまうため、text-smより小さくしない。 -->
           <input type="text" name="q" value="{{ q }}"
             placeholder='タグをスペース区切りでAND検索 (部分一致OK、"完全一致"は引用符で囲む)'
-            class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm">
+            class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:text-sm">
           <button type="submit" class="shrink-0 rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500">
             検索
           </button>
@@ -58,22 +60,22 @@
         <div id="filters-panel" class="hidden flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
           <input type="text" name="folder" value="{{ folder }}"
             placeholder="フォルダで絞り込み"
-            class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm sm:w-56">
+            class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-56 sm:text-sm">
           <div class="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
             <span>general</span>
             <input type="number" name="gt_min" value="{{ gt_min }}" step="0.05" min="0" max="1"
-              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
             <span>~</span>
             <input type="number" name="gt_max" value="{{ gt_max }}" step="0.05" min="0" max="1"
-              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
           </div>
           <div class="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
             <span>character</span>
             <input type="number" name="ct_min" value="{{ ct_min }}" step="0.05" min="0" max="1"
-              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
             <span>~</span>
             <input type="number" name="ct_max" value="{{ ct_max }}" step="0.05" min="0" max="1"
-              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1">
+              class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
           </div>
           <label class="flex items-center gap-1 text-xs text-neutral-400">
             <input type="checkbox" name="exclude_sensitive" value="1" {{ 'checked' if exclude_sensitive else '' }}
