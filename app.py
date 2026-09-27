@@ -319,21 +319,27 @@ def index():
     tags = parse_query(q)
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
     exclude_sensitive = get_exclude_sensitive()
+    # フォーム送信(検索実行)時は build_url/フォームの全フィールドが必ずクエリに
+    # 乗るため、素の "/" アクセス(クエリなし)と確実に区別できる。
+    has_searched = bool(request.args)
 
-    conn = get_conn()
-    try:
-        rows, total = search_images(
-            conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, page
+    if has_searched:
+        conn = get_conn()
+        try:
+            rows, total = search_images(
+                conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, page
+            )
+        finally:
+            conn.close()
+
+        has_next = page * PAGE_SIZE < total
+        next_url = (
+            build_url(page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+            if has_next
+            else None
         )
-    finally:
-        conn.close()
-
-    has_next = page * PAGE_SIZE < total
-    next_url = (
-        build_url(page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
-        if has_next
-        else None
-    )
+    else:
+        rows, total, has_next, next_url = [], 0, False, None
 
     context = dict(
         q=q,
@@ -348,13 +354,7 @@ def index():
         page=page,
         has_next=has_next,
         next_url=next_url,
-        defaults={
-            "gt_min": DEFAULT_GENERAL_MIN,
-            "gt_max": 1.0,
-            "ct_min": DEFAULT_CHARACTER_MIN,
-            "ct_max": 1.0,
-            "exclude_sensitive": True,
-        },
+        has_searched=has_searched,
     )
 
     if request.headers.get("HX-Request"):
