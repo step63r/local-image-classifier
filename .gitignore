@@ -7,3 +7,5 @@ __pycache__/
 *.db-shm
 logs/
 .claude/
+session1_tagging.ps1
+session2_migrate.ps1
