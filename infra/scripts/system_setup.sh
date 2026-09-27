@@ -118,6 +118,16 @@ if [ ! -d /opt/imageapp/venv ]; then
 fi
 sudo -u imageapp /opt/imageapp/venv/bin/pip install --upgrade pip
 
+# SECRET_KEY signs Flask's session cookie, so unlike PGPASS it must survive
+# re-runs of this script unchanged -- regenerating it would silently log
+# everyone out. Reuse the existing value from app.env if this instance has
+# already been set up once.
+if [ -f /opt/imageapp/app.env ] && grep -q '^SECRET_KEY=' /opt/imageapp/app.env; then
+    SECRET_KEY=$(grep '^SECRET_KEY=' /opt/imageapp/app.env | cut -d= -f2-)
+else
+    SECRET_KEY=$(openssl rand -hex 32)
+fi
+
 # --- env file (rewritten every run so it always matches the current PGPASS) -
 cat > /opt/imageapp/app.env <<EOF
 DATABASE_URL=postgresql://imageapp:${PGPASS}@localhost:5432/imagedb
@@ -125,6 +135,7 @@ AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 S3_BUCKET=${S3_BUCKET}
 AUTH_USERNAME=${AUTH_USERNAME}
 AUTH_PASSWORD=${AUTH_PASSWORD}
+SECRET_KEY=${SECRET_KEY}
 EOF
 chmod 600 /opt/imageapp/app.env
 chown imageapp:imageapp /opt/imageapp/app.env

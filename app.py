@@ -2,14 +2,19 @@
 """Minimal Flask UI for searching WD14 tags stored by batch_tag.py / migrate_to_aws.py.
 
 Reads from PostgreSQL (DATABASE_URL) and serves images/thumbnails from S3
-(S3_BUCKET), streamed through Flask so Basic Auth stays the single gate for
-all content, including images -- see infra/README.md for the CloudFront
-cache-key implications of that design.
+(S3_BUCKET), streamed through Flask so the login session stays the single
+gate for all content, including images -- see infra/README.md for the
+CloudFront cache-key implications of that design.
 """
 from __future__ import annotations
 
+import hmac
 import os
 import re
+import secrets
+import time
+from datetime import timedelta
+from functools import wraps
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -17,8 +22,17 @@ import boto3
 import botocore.exceptions
 import psycopg2
 import psycopg2.extras
-from flask import Flask, Response, abort, render_template, request, stream_with_context
-from flask_httpauth import HTTPBasicAuth
+from flask import (
+    Flask,
+    Response,
+    abort,
+    redirect,
+    render_template,
+    request,
+    session,
+    stream_with_context,
+    url_for,
+)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -32,7 +46,20 @@ DEFAULT_CHARACTER_MIN = 0.85
 SENSITIVE_RATINGS = ("sensitive", "questionable", "explicit")
 
 app = Flask(__name__)
-auth = HTTPBasicAuth()
+app.config.update(
+    # gunicorn runs multiple worker processes (no --preload), so this must be
+    # a fixed value shared across them -- a per-process random key would make
+    # sessions validate on whichever worker issued them and fail on the rest.
+    SECRET_KEY=os.environ["SECRET_KEY"],
+    SESSION_COOKIE_NAME="imgapp_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    # Local http:// testing needs this off; CloudFront always terminates TLS
+    # in production, so it defaults on.
+    SESSION_COOKIE_SECURE=os.environ.get("SECURE_COOKIES", "1") != "0",
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=180),
+    SESSION_REFRESH_EACH_REQUEST=False,
+)
 s3 = boto3.client("s3")  # picks up creds from the EC2 instance role automatically
 
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "admin")
@@ -48,11 +75,67 @@ if "AUTH_USERNAME" not in os.environ or (
     )
 
 
-@auth.verify_password
-def verify_password(username: str, password: str) -> str | None:
-    if username == AUTH_USERNAME and check_password_hash(AUTH_PASSWORD_HASH, password):
-        return username
-    return None
+def _safe_next(raw: str) -> str:
+    # Restrict redirect targets to same-site absolute paths to avoid an open
+    # redirect through the "next" param.
+    if raw and raw.startswith("/") and not raw.startswith("//"):
+        return raw
+    return "/"
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("authenticated"):
+            next_url = request.full_path if request.query_string else request.path
+            login_url = url_for("login", next=next_url)
+            if request.headers.get("HX-Request"):
+                # A plain redirect would just swap the grid partial for the
+                # login page's HTML inside the results div -- HX-Redirect
+                # tells htmx to navigate the whole browser instead.
+                resp = Response(status=200)
+                resp.headers["HX-Redirect"] = login_url
+                return resp
+            return redirect(login_url)
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("authenticated"):
+        return redirect(_safe_next(request.args.get("next", "/")))
+
+    error = None
+    if request.method == "POST":
+        next_url = _safe_next(request.form.get("next", "/"))
+        token_ok = hmac.compare_digest(
+            request.form.get("csrf_token", ""), session.get("csrf_token", "")
+        )
+        if (
+            token_ok
+            and request.form.get("username") == AUTH_USERNAME
+            and check_password_hash(AUTH_PASSWORD_HASH, request.form.get("password", ""))
+        ):
+            session.clear()
+            session["authenticated"] = True
+            session.permanent = True
+            return redirect(next_url)
+        time.sleep(1)  # cheap brute-force friction on top of the WAF rate limit
+        error = "ユーザー名またはパスワードが違います"
+
+    csrf_token = secrets.token_urlsafe(16)
+    session["csrf_token"] = csrf_token
+    return render_template(
+        "login.html", error=error, next=request.values.get("next", "/"), csrf_token=csrf_token
+    )
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 def get_conn() -> psycopg2.extensions.connection:
@@ -228,7 +311,7 @@ def build_url(
 
 
 @app.route("/")
-@auth.login_required
+@login_required
 def index():
     q = request.args.get("q", "").strip()
     folder = request.args.get("folder", "").strip()
@@ -297,7 +380,7 @@ def _stream_s3(key: str, fallback_content_type: str) -> Response:
 
 
 @app.route("/image/<int:image_id>")
-@auth.login_required
+@login_required
 def image(image_id: int):
     conn = get_conn()
     try:
@@ -313,7 +396,7 @@ def image(image_id: int):
 
 
 @app.route("/thumb/<int:image_id>")
-@auth.login_required
+@login_required
 def thumb(image_id: int):
     conn = get_conn()
     try:
@@ -328,7 +411,7 @@ def thumb(image_id: int):
 
 
 @app.route("/detail/<int:image_id>")
-@auth.login_required
+@login_required
 def detail(image_id: int):
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
     folder = request.args.get("folder", "").strip()

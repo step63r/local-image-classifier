@@ -32,7 +32,10 @@
     <div class="mx-auto max-w-6xl px-4 py-2 sm:py-3">
       <div class="flex items-center justify-between gap-2 sm:mb-2">
         <h1 class="text-base font-semibold sm:text-lg">Image Tag Search</h1>
-        <p class="text-xs text-neutral-500">{{ total }} 件</p>
+        <div class="flex items-center gap-3">
+          <p class="text-xs text-neutral-500">{{ total }} 件</p>
+          <a href="/logout" class="text-xs text-neutral-500 hover:underline">ログアウト</a>
+        </div>
       </div>
       <form method="get" action="/" class="mt-2 flex flex-col gap-2">
         <div class="flex gap-2">

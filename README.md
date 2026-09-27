@@ -59,10 +59,12 @@ $env:DATABASE_URL = "postgresql://<user>:<password>@<host>:<port>/<dbname>"
 $env:S3_BUCKET = "<バケット名>"
 $env:AUTH_USERNAME = "<任意のユーザー名>"
 $env:AUTH_PASSWORD = "<任意のパスワード>"
+$env:SECRET_KEY = "<セッションCookie署名用のランダム文字列>"
+$env:SECURE_COOKIES = "0"  # ローカルのhttp://で確認する場合のみ
 python app.py
 ```
 
-`AUTH_USERNAME` / `AUTH_PASSWORD`未設定の場合はデフォルト(`admin` / `changeme`)で起動しつつ警告が出ます。ローカル確認以外では必ず設定してください。
+`AUTH_USERNAME` / `AUTH_PASSWORD`未設定の場合はデフォルト(`admin` / `changeme`)で起動しつつ警告が出ます。ローカル確認以外では必ず設定してください。`SECRET_KEY`は必須(未設定だと起動時エラー)で、Flaskのセッションログイン(`/login`)のCookie署名に使われます。
 
 ### AWSへの初回デプロイ
 

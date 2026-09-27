@@ -149,11 +149,13 @@ $env:IMAGEAPP_BUCKET = "<MediaBucketName>"
 ```powershell
 # インスタンス上で直接(Session Manager経由)
 aws ssm start-session --target <InstanceId>
-# シェル内で: curl -u <authUsername>:<authPassword> http://localhost:8000/
+# シェル内で: curl -I http://localhost:8000/  (未ログインなら/loginへの302)
 
 # CloudFrontのデフォルトドメイン経由(カスタムドメインのDNS切り替え前でも動く)
-curl -u <authUsername>:<authPassword> https://<DistributionDomainName>/
+curl -I https://<DistributionDomainName>/
 ```
+
+ブラウザで`https://<DistributionDomainName>/login`を開き、`-c authUsername`/`-c authPassword`に設定したユーザー名・パスワードでログインできることを確認する。
 
 ## 7. 独自ドメインへの切り替え
 
@@ -161,7 +163,7 @@ curl -u <authUsername>:<authPassword> https://<DistributionDomainName>/
 こちらも「DNSのみ」(オレンジクラウド禁止 — 二重CDN+証明書不整合になる)。
 
 ```powershell
-curl -u <authUsername>:<authPassword> https://image-classifier.minatoproject.com/
+curl -I https://image-classifier.minatoproject.com/
 ```
 
 ## 以後のコード変更
@@ -174,8 +176,8 @@ curl -u <authUsername>:<authPassword> https://image-classifier.minatoproject.com
 - **SSHは完全に廃止**: セキュリティグループに22番ポートは無く、キーペアも作成しない。
   管理アクセスはSession Manager(AWSコンソールまたは`aws ssm start-session`)のみ。
   ポートフォワードもSSMの`AWS-StartPortForwardingSession`ドキュメントで代替している。
-- **CloudFrontのキャッシュと認証**: `/image/*`・`/thumb/*`のキャッシュキーには`Authorization`ヘッダーが含まれる。
-  同じ認証情報でのリクエストはキャッシュヒットするが、認証情報が異なる/無い場合は必ずオリジン(Flask)に転送され401になる。
+- **CloudFrontのキャッシュとログインセッション**: `/image/*`・`/thumb/*`のキャッシュキーには`imgapp_session`Cookieが含まれる。
+  同じセッションでのリクエストはキャッシュヒットするが、セッションが異なる/無い場合は必ずオリジン(Flask)に転送され`/login`へリダイレクトされる。
   個人利用前提での許容範囲のトレードオフとして受け入れている。
 - **S3バケットは`RemovalPolicy.RETAIN`**: `cdk destroy`しても消えない。24GBの原本を誤って失わないため。
   本当に削除したい場合は手動で`aws s3 rm --recursive`してからバケット削除する。

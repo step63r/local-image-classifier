@@ -116,8 +116,9 @@ class AppStack(Stack):
         eip = ec2.CfnEIP(self, "AppEip", instance_id=instance.instance_id, domain="vpc")
 
         # --- CloudFront ---------------------------------------------------------
-        # Single origin (the EC2 instance) so Flask-HTTPAuth stays the one and
-        # only auth gate -- there is deliberately no separate S3-direct origin.
+        # Single origin (the EC2 instance) so the Flask login session stays
+        # the one and only auth gate -- there is deliberately no separate
+        # S3-direct origin.
         # CloudFront rejects a bare IP address as a custom origin domain name,
         # so derive AWS's own DNS hostname for the EIP (ec2-1-2-3-4.<region>.
         # compute.amazonaws.com) instead of using eip.ref directly.
@@ -130,18 +131,19 @@ class AppStack(Stack):
         )
 
         # Images/thumbnails: cache at the edge, but the cache key MUST include
-        # Authorization -- otherwise a cache HIT would skip Flask's auth check
-        # entirely and serve images to unauthenticated requests. This is the
-        # one place caching and Basic Auth are in tension; including the
-        # header in the cache key resolves it (same credentials -> cache hit,
-        # no/different credentials -> forwarded to origin -> 401).
+        # the session cookie -- otherwise a cache HIT would skip Flask's login
+        # check entirely and serve images to unauthenticated requests. This is
+        # the one place caching and the login session are in tension;
+        # including the cookie in the cache key resolves it (same session ->
+        # cache hit, no/different session -> forwarded to origin -> redirect
+        # to /login).
         media_cache_policy = cloudfront.CachePolicy(
             self,
             "MediaCachePolicy",
             cache_policy_name=f"{construct_id}-media",
-            header_behavior=cloudfront.CacheHeaderBehavior.allow_list("Authorization"),
+            header_behavior=cloudfront.CacheHeaderBehavior.none(),
             query_string_behavior=cloudfront.CacheQueryStringBehavior.none(),
-            cookie_behavior=cloudfront.CacheCookieBehavior.none(),
+            cookie_behavior=cloudfront.CacheCookieBehavior.allow_list("imgapp_session"),
             default_ttl=Duration.days(30),
             max_ttl=Duration.days(365),
             min_ttl=Duration.seconds(0),
@@ -150,12 +152,13 @@ class AppStack(Stack):
         )
 
         # Search pages / htmx partials: always dynamic, never cached, but the
-        # app needs to see the real query string + auth + htmx headers.
-        # `Authorization` (and `Accept-Encoding`) can only be forwarded via a
-        # CachePolicy's header allow-list, not an OriginRequestPolicy's -- so
-        # this uses a near-zero-TTL *custom* CachePolicy (CloudFront's own
+        # app needs to see the real query string + session cookie + htmx
+        # headers. The session cookie can only be forwarded via a CachePolicy's
+        # cookie allow-list, not an OriginRequestPolicy's -- so this uses a
+        # near-zero-TTL *custom* CachePolicy (CloudFront's own
         # CACHING_DISABLED managed policy forwards no extra headers/query
-        # strings at all, which would break search params and auth here).
+        # strings at all, which would break search params and the login
+        # session here).
         # max_ttl must be > 0: CloudFront rejects a non-none HeaderBehavior on
         # a policy where min/default/max TTL are all exactly 0 ("caching
         # disabled"), so max_ttl=1s keeps it just barely "enabled" while
@@ -164,9 +167,9 @@ class AppStack(Stack):
             self,
             "SearchCachePolicy",
             cache_policy_name=f"{construct_id}-search",
-            header_behavior=cloudfront.CacheHeaderBehavior.allow_list("Authorization"),
+            header_behavior=cloudfront.CacheHeaderBehavior.none(),
             query_string_behavior=cloudfront.CacheQueryStringBehavior.all(),
-            cookie_behavior=cloudfront.CacheCookieBehavior.none(),
+            cookie_behavior=cloudfront.CacheCookieBehavior.allow_list("imgapp_session"),
             default_ttl=Duration.seconds(0),
             max_ttl=Duration.seconds(1),
             min_ttl=Duration.seconds(0),
@@ -179,7 +182,7 @@ class AppStack(Stack):
                 "HX-Request", "HX-Target", "HX-Current-URL"
             ),
             query_string_behavior=cloudfront.OriginRequestQueryStringBehavior.all(),
-            cookie_behavior=cloudfront.OriginRequestCookieBehavior.none(),
+            cookie_behavior=cloudfront.OriginRequestCookieBehavior.allow_list("imgapp_session"),
         )
 
         distribution = cloudfront.Distribution(
@@ -190,7 +193,9 @@ class AppStack(Stack):
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cache_policy=search_cache_policy,
                 origin_request_policy=search_origin_request_policy,
-                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+                # ALLOW_ALL (not just GET/HEAD/OPTIONS): /login is a POST and
+                # lives under this default behavior.
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
             ),
             additional_behaviors={
                 "/image/*": cloudfront.BehaviorOptions(
