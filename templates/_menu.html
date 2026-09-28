@@ -1,0 +1,38 @@
+<!-- position: fixed の基準がヘッダー(backdrop-blurで包含ブロックが生成される)にならないよう、
+     header要素の外(bodyの直下)に配置すること。 -->
+<div id="menuOverlay" class="fixed inset-0 z-30 hidden bg-black/50" onclick="window.closeHeaderMenu()"></div>
+<div id="menuPanel"
+  class="fixed inset-y-0 right-0 z-40 w-64 max-w-[80vw] translate-x-full transform border-l border-neutral-800 bg-neutral-900 shadow-xl transition-transform duration-200 ease-out">
+  <div class="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
+    <span class="text-sm font-medium text-neutral-300">メニュー</span>
+    <button type="button" aria-label="閉じる" onclick="window.closeHeaderMenu()"
+      class="text-neutral-400 hover:text-neutral-200">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+        stroke="currentColor" class="h-5 w-5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+      </svg>
+    </button>
+  </div>
+  <nav class="flex flex-col p-2">
+    <a href="/" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">TOP</a>
+    <a href="/logout" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">ログアウト</a>
+  </nav>
+</div>
+
+<script>
+  (function () {
+    var menuBtn = document.getElementById('menuBtn');
+    var overlay = document.getElementById('menuOverlay');
+    var panel = document.getElementById('menuPanel');
+    window.closeHeaderMenu = function () {
+      overlay.classList.add('hidden');
+      panel.classList.add('translate-x-full');
+    };
+    if (menuBtn) {
+      menuBtn.addEventListener('click', function () {
+        overlay.classList.remove('hidden');
+        panel.classList.remove('translate-x-full');
+      });
+    }
+  })();
+</script>

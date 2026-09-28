@@ -423,22 +423,6 @@ def detail(image_id: int):
         # exact tag, not any tag containing it as a substring.
         return build_url(1, f'"{tag}"', folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
 
-    back_params = {
-        k: v
-        for k, v in {
-            "q": request.args.get("q", ""),
-            "folder": request.args.get("folder", ""),
-            "page": request.args.get("page", ""),
-            "gt_min": request.args.get("gt_min", ""),
-            "gt_max": request.args.get("gt_max", ""),
-            "ct_min": request.args.get("ct_min", ""),
-            "ct_max": request.args.get("ct_max", ""),
-            "exclude_sensitive": request.args.get("exclude_sensitive", ""),
-        }.items()
-        if v
-    }
-    back_url = "/?" + urlencode(back_params) if back_params else "/"
-
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -469,13 +453,16 @@ def detail(image_id: int):
         image=img,
         tags=tags,
         related=related,
+        # ヘッダーの検索フォームは詳細画面の遷移元クエリを引き継がず、常に空の状態で表示する。
+        q="",
+        folder="",
         gt_min=gt_min,
         gt_max=gt_max,
         ct_min=ct_min,
         ct_max=ct_max,
+        exclude_sensitive=exclude_sensitive,
         passes=passes,
         has_extra_tags=has_extra_tags,
-        back_url=back_url,
         tag_url=tag_url,
     )
 

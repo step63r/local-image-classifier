@@ -57,20 +57,16 @@
 </style>
 </head>
 <body class="min-h-full bg-neutral-950 text-neutral-100">
-  <div class="mx-auto max-w-5xl px-4 py-4">
-    <div class="flex items-center justify-between">
-      <a href="{{ back_url }}" aria-label="戻る"
-        onclick="if (document.referrer && new URL(document.referrer).origin === window.location.origin) { history.back(); return false; }"
-        class="text-neutral-400 hover:text-neutral-200">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-          stroke="currentColor" class="h-5 w-5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-        </svg>
-      </a>
-      <a href="/logout" class="text-xs text-neutral-500 hover:underline">ログアウト</a>
+  <header class="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
+    <div class="mx-auto max-w-6xl px-4 py-2 sm:py-3">
+      {% set show_chrome = true %}
+      {% include "_search_form.html" %}
     </div>
+  </header>
+  {% include "_menu.html" %}
 
-    <div id="detailRow" class="mt-4 flex flex-col gap-4 md:flex-row">
+  <div class="mx-auto max-w-5xl px-4 py-4">
+    <div id="detailRow" class="flex flex-col gap-4 md:flex-row">
       <div id="detailImgWrap" class="w-full md:w-auto">
         <img id="detailImg" src="/image/{{ image['id'] }}" alt=""
           class="max-h-[80vh] w-full rounded-lg object-contain md:w-auto"
