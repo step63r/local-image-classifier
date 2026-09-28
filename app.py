@@ -140,7 +140,9 @@ def logout():
 
 def get_conn() -> psycopg2.extensions.connection:
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-    conn.autocommit = True  # app.py is read-only; avoids idle-in-transaction connections
+    # Autocommit avoids idle-in-transaction connections; the only writes are
+    # the saved-searches toggle/delete routes below, each a single statement.
+    conn.autocommit = True
     return conn
 
 
@@ -165,13 +167,16 @@ def parse_query(q: str) -> list[tuple[str, bool]]:
     return terms
 
 
-def _float_arg(name: str, absent_default: float, empty_default: float) -> float:
+def _float_arg(name: str, absent_default: float, empty_default: float, source=None) -> float:
     # Distinguishes "param not in the querystring" (fresh page load -> use
     # the friendly default) from "param present but cleared by the user"
-    # (explicit request for an open-ended bound).
-    if name not in request.args:
+    # (explicit request for an open-ended bound). `source` defaults to
+    # request.args but accepts request.form too (saved-search POST routes
+    # parse the same fields out of a form body).
+    source = request.args if source is None else source
+    if name not in source:
         return absent_default
-    raw = request.args.get(name, "").strip()
+    raw = source.get(name, "").strip()
     if raw == "":
         return empty_default
     try:
@@ -180,22 +185,24 @@ def _float_arg(name: str, absent_default: float, empty_default: float) -> float:
         return absent_default
 
 
-def get_thresholds() -> tuple[float, float, float, float]:
-    gt_min = _float_arg("gt_min", DEFAULT_GENERAL_MIN, 0.0)
-    gt_max = _float_arg("gt_max", 1.0, 1.0)
-    ct_min = _float_arg("ct_min", DEFAULT_CHARACTER_MIN, 0.0)
-    ct_max = _float_arg("ct_max", 1.0, 1.0)
+def get_thresholds(source=None) -> tuple[float, float, float, float]:
+    source = request.args if source is None else source
+    gt_min = _float_arg("gt_min", DEFAULT_GENERAL_MIN, 0.0, source)
+    gt_max = _float_arg("gt_max", 1.0, 1.0, source)
+    ct_min = _float_arg("ct_min", DEFAULT_CHARACTER_MIN, 0.0, source)
+    ct_max = _float_arg("ct_max", 1.0, 1.0, source)
     return gt_min, gt_max, ct_min, ct_max
 
 
-def get_exclude_sensitive() -> bool:
+def get_exclude_sensitive(source=None) -> bool:
     # Defaults to on for a fresh page load. Once the form has been submitted
     # (or a link built by this app has been followed), the param is always
     # present as "1"/"0" -- see the hidden-field trick in index.html -- so an
     # explicit uncheck is distinguishable from "never set".
-    if "exclude_sensitive" not in request.args:
+    source = request.args if source is None else source
+    if "exclude_sensitive" not in source:
         return True
-    return request.args.get("exclude_sensitive") == "1"
+    return source.get("exclude_sensitive") == "1"
 
 
 def like_pattern(term: str) -> str:
@@ -310,6 +317,53 @@ def build_url(
     return "/?" + urlencode(params)
 
 
+def describe_search(
+    q: str,
+    folder: str,
+    gt_min: float,
+    gt_max: float,
+    ct_min: float,
+    ct_max: float,
+    exclude_sensitive: bool,
+) -> str:
+    # Generated fresh from the stored params on every render (never persisted
+    # as its own column), so refining this format later needs no backfill.
+    # Only non-default thresholds/flags are called out, since the common case
+    # (default thresholds, sensitive excluded) should collapse to just the
+    # query text.
+    parts = []
+    if q:
+        parts.append(q)
+    if folder:
+        parts.append(folder)
+    if (gt_min, gt_max) != (DEFAULT_GENERAL_MIN, 1.0):
+        parts.append(f"general {gt_min:g}-{gt_max:g}")
+    if (ct_min, ct_max) != (DEFAULT_CHARACTER_MIN, 1.0):
+        parts.append(f"character {ct_min:g}-{ct_max:g}")
+    if not exclude_sensitive:
+        parts.append("R18含む")
+    return " ・ ".join(parts) if parts else "(全件)"
+
+
+def find_saved_search(
+    cur,
+    q: str,
+    folder: str,
+    gt_min: float,
+    gt_max: float,
+    ct_min: float,
+    ct_max: float,
+    exclude_sensitive: bool,
+):
+    cur.execute(
+        "SELECT id FROM saved_searches "
+        "WHERE q = %s AND folder = %s AND gt_min = %s AND gt_max = %s "
+        "AND ct_min = %s AND ct_max = %s AND exclude_sensitive = %s",
+        (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive),
+    )
+    return cur.fetchone()
+
+
 @app.route("/")
 @login_required
 def index():
@@ -329,6 +383,13 @@ def index():
             rows, total = search_images(
                 conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, page
             )
+            with conn.cursor() as cur:
+                is_saved = (
+                    find_saved_search(
+                        cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive
+                    )
+                    is not None
+                )
         finally:
             conn.close()
 
@@ -339,7 +400,7 @@ def index():
             else None
         )
     else:
-        rows, total, has_next, next_url = [], 0, False, None
+        rows, total, has_next, next_url, is_saved = [], 0, False, None, False
 
     context = dict(
         q=q,
@@ -355,6 +416,7 @@ def index():
         has_next=has_next,
         next_url=next_url,
         has_searched=has_searched,
+        is_saved=is_saved,
     )
 
     if request.headers.get("HX-Request"):
@@ -465,6 +527,90 @@ def detail(image_id: int):
         has_extra_tags=has_extra_tags,
         tag_url=tag_url,
     )
+
+
+@app.route("/saved-searches/toggle", methods=["POST"])
+@login_required
+def toggle_saved_search():
+    q = request.form.get("q", "").strip()
+    folder = request.form.get("folder", "").strip()
+    gt_min, gt_max, ct_min, ct_max = get_thresholds(request.form)
+    exclude_sensitive = get_exclude_sensitive(request.form)
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            existing = find_saved_search(
+                cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive
+            )
+            if existing:
+                cur.execute("DELETE FROM saved_searches WHERE id = %s", (existing["id"],))
+                is_saved = False
+            else:
+                cur.execute(
+                    "INSERT INTO saved_searches "
+                    "(q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive),
+                )
+                is_saved = True
+    finally:
+        conn.close()
+
+    return render_template(
+        "_save_star.html",
+        q=q,
+        folder=folder,
+        gt_min=gt_min,
+        gt_max=gt_max,
+        ct_min=ct_min,
+        ct_max=ct_max,
+        exclude_sensitive=exclude_sensitive,
+        is_saved=is_saved,
+    )
+
+
+@app.route("/saved-searches")
+@login_required
+def saved_searches():
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive "
+                "FROM saved_searches ORDER BY created_at DESC"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    items = [
+        dict(
+            id=r["id"],
+            label=describe_search(
+                r["q"], r["folder"], r["gt_min"], r["gt_max"], r["ct_min"], r["ct_max"],
+                r["exclude_sensitive"],
+            ),
+            url=build_url(
+                1, r["q"], r["folder"], r["gt_min"], r["gt_max"], r["ct_min"], r["ct_max"],
+                r["exclude_sensitive"],
+            ),
+        )
+        for r in rows
+    ]
+    return render_template("saved_searches.html", items=items)
+
+
+@app.route("/saved-searches/<int:saved_search_id>/delete", methods=["POST"])
+@login_required
+def delete_saved_search(saved_search_id: int):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM saved_searches WHERE id = %s", (saved_search_id,))
+    finally:
+        conn.close()
+    return ""
 
 
 if __name__ == "__main__":

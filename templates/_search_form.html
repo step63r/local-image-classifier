@@ -24,11 +24,9 @@
         </svg>
       </button>
     </div>
-    <button type="button"
-      onclick="var p=document.getElementById('filters-panel'); p.classList.toggle('hidden'); p.classList.toggle('flex');"
-      class="shrink-0 rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300">
-      詳細
-    </button>
+    {% if show_save_star %}
+    {% include "_save_star.html" %}
+    {% endif %}
     {% if show_chrome %}
     <button type="button" id="menuBtn" aria-label="メニュー"
       class="shrink-0 text-neutral-400 hover:text-neutral-200">
@@ -39,6 +37,11 @@
     </button>
     {% endif %}
   </div>
+  <button type="button"
+    onclick="var p=document.getElementById('filters-panel'); p.classList.toggle('hidden'); p.classList.toggle('flex');"
+    class="self-start text-xs text-neutral-400 underline hover:text-neutral-200">
+    詳細
+  </button>
   <div id="filters-panel" class="hidden flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
     <input type="text" name="folder" value="{{ folder }}"
       placeholder="フォルダで絞り込み"

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>保存した検索条件</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body class="min-h-full bg-neutral-950 text-neutral-100">
+  <header class="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 sm:py-3">
+      <a href="/" aria-label="戻る" class="shrink-0 text-neutral-400 hover:text-neutral-200">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+          stroke="currentColor" class="h-5 w-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+        </svg>
+      </a>
+      <h1 class="min-w-0 flex-1 text-sm font-medium text-neutral-300">保存した検索条件</h1>
+      <button type="button" id="menuBtn" aria-label="メニュー"
+        class="shrink-0 text-neutral-400 hover:text-neutral-200">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+          stroke="currentColor" class="h-5 w-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+        </svg>
+      </button>
+    </div>
+  </header>
+  {% include "_menu.html" %}
+
+  <main class="mx-auto max-w-6xl px-4 py-4">
+    {% if items %}
+    <ul class="divide-y divide-neutral-800">
+      {% for item in items %}
+      <li id="saved-{{ item.id }}" class="flex items-center gap-3 py-3">
+        <a href="{{ item.url }}" class="min-w-0 flex-1 truncate text-sm text-neutral-200 hover:underline">{{ item.label }}</a>
+        <button type="button" hx-post="/saved-searches/{{ item.id }}/delete"
+          hx-target="#saved-{{ item.id }}" hx-swap="outerHTML"
+          aria-label="削除" class="shrink-0 text-lg leading-none text-amber-400">★</button>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-neutral-500">保存した検索条件はありません。</p>
+    {% endif %}
+  </main>
+</body>
+</html>

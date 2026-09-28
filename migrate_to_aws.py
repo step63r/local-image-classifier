@@ -75,6 +75,22 @@ CREATE TABLE IF NOT EXISTS tags (
 
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
 CREATE INDEX IF NOT EXISTS idx_images_status ON images(status);
+
+-- No user_id: single global user, same as every other table here. The
+-- UNIQUE constraint doubles as the "is this exact search already saved"
+-- lookup key, so no separate hash/key column is needed.
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id SERIAL PRIMARY KEY,
+    q TEXT NOT NULL DEFAULT '',
+    folder TEXT NOT NULL DEFAULT '',
+    gt_min DOUBLE PRECISION NOT NULL,
+    gt_max DOUBLE PRECISION NOT NULL,
+    ct_min DOUBLE PRECISION NOT NULL,
+    ct_max DOUBLE PRECISION NOT NULL,
+    exclude_sensitive BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+);
 """
 
 

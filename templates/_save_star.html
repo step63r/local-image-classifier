@@ -1,0 +1,6 @@
+<button type="button"
+  hx-post="/saved-searches/toggle"
+  hx-vals='js:{q: {{ q | tojson }}, folder: {{ folder | tojson }}, gt_min: {{ gt_min }}, gt_max: {{ gt_max }}, ct_min: {{ ct_min }}, ct_max: {{ ct_max }}, exclude_sensitive: "{{ '1' if exclude_sensitive else '0' }}"}'
+  hx-target="this" hx-swap="outerHTML"
+  aria-label="{{ '検索条件の保存を解除' if is_saved else '検索条件を保存' }}"
+  class="shrink-0 text-xl leading-none {{ 'text-amber-400' if is_saved else 'text-neutral-500 hover:text-neutral-300' }}">{{ '★' if is_saved else '☆' }}</button>
