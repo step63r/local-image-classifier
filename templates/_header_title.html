@@ -1,0 +1,18 @@
+<div class="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4">
+  {% if back_url %}
+  <a href="{{ back_url }}" aria-label="戻る" class="shrink-0 text-neutral-400 hover:text-neutral-200">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+      stroke="currentColor" class="h-5 w-5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+    </svg>
+  </a>
+  {% endif %}
+  <h1 class="min-w-0 flex-1 text-sm font-medium text-neutral-300">{{ header_title }}</h1>
+  <button type="button" id="menuBtn" aria-label="メニュー"
+    class="shrink-0 text-neutral-400 hover:text-neutral-200">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+      stroke="currentColor" class="h-5 w-5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+    </svg>
+  </button>
+</div>
