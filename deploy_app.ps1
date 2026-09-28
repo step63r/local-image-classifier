@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Ships app.py/requirements-server.txt/templates to the EC2 instance and
+    Ships app.py/requirements-server.txt/templates/static to the EC2 instance and
     restarts the imageapp service, via S3 + SSM Run Command (no SSH/scp --
     the instance has no open SSH port or key pair; see infra/README.md).
 
@@ -26,8 +26,8 @@ if (-not $Bucket) {
 $archive = Join-Path $env:TEMP "imageapp-deploy.tar.gz"
 if (Test-Path $archive) { Remove-Item $archive }
 
-Write-Host "Packaging app.py, requirements-server.txt, templates/ ..."
-tar -czf $archive app.py requirements-server.txt templates
+Write-Host "Packaging app.py, requirements-server.txt, templates/, static/ ..."
+tar -czf $archive app.py requirements-server.txt templates static
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $s3Key = "deploy/app.tar.gz"
