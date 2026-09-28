@@ -29,7 +29,7 @@
     {% endif %}
     {% if show_chrome %}
     <button type="button" id="menuBtn" aria-label="メニュー"
-      class="shrink-0 text-neutral-400 hover:text-neutral-200">
+      class="shrink-0 text-neutral-400 hover:text-neutral-200 lg:hidden">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
         stroke="currentColor" class="h-5 w-5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
@@ -47,21 +47,33 @@
       <input type="text" name="folder" value="{{ folder }}"
         placeholder="フォルダで絞り込み"
         class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-56 sm:text-sm">
-      <div class="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
-        <span>general</span>
-        <input type="number" name="gt_min" value="{{ gt_min }}" step="0.05" min="0" max="1"
-          class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
-        <span>~</span>
-        <input type="number" name="gt_max" value="{{ gt_max }}" step="0.05" min="0" max="1"
-          class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
+      <div class="flex flex-col gap-1 text-xs text-neutral-400 sm:w-48">
+        <div class="flex items-center justify-between">
+          <span>general</span>
+          <span class="tabular-nums text-neutral-500" data-range-value>{{ "%.2f"|format(gt_min) }} ~ {{ "%.2f"|format(gt_max) }}</span>
+        </div>
+        <div class="range-slider relative h-4" data-range-slider>
+          <div class="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded bg-neutral-700"></div>
+          <div class="absolute top-1/2 h-1 -translate-y-1/2 rounded bg-sky-500" data-range-fill></div>
+          <input type="range" name="gt_min" value="{{ gt_min }}" min="0" max="1" step="0.05"
+            class="range-slider-input" data-range-min>
+          <input type="range" name="gt_max" value="{{ gt_max }}" min="0" max="1" step="0.05"
+            class="range-slider-input" data-range-max>
+        </div>
       </div>
-      <div class="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
-        <span>character</span>
-        <input type="number" name="ct_min" value="{{ ct_min }}" step="0.05" min="0" max="1"
-          class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
-        <span>~</span>
-        <input type="number" name="ct_max" value="{{ ct_max }}" step="0.05" min="0" max="1"
-          class="w-16 rounded border border-neutral-700 bg-neutral-900 px-1 py-1 text-base sm:text-xs">
+      <div class="flex flex-col gap-1 text-xs text-neutral-400 sm:w-48">
+        <div class="flex items-center justify-between">
+          <span>character</span>
+          <span class="tabular-nums text-neutral-500" data-range-value>{{ "%.2f"|format(ct_min) }} ~ {{ "%.2f"|format(ct_max) }}</span>
+        </div>
+        <div class="range-slider relative h-4" data-range-slider>
+          <div class="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded bg-neutral-700"></div>
+          <div class="absolute top-1/2 h-1 -translate-y-1/2 rounded bg-sky-500" data-range-fill></div>
+          <input type="range" name="ct_min" value="{{ ct_min }}" min="0" max="1" step="0.05"
+            class="range-slider-input" data-range-min>
+          <input type="range" name="ct_max" value="{{ ct_max }}" min="0" max="1" step="0.05"
+            class="range-slider-input" data-range-max>
+        </div>
       </div>
       <label class="flex items-center gap-1 text-xs text-neutral-400">
         <input type="checkbox" name="exclude_sensitive" value="1" {{ 'checked' if exclude_sensitive else '' }}
@@ -77,6 +89,47 @@
     </div>
   </div>
 </form>
+
+<script>
+  (function () {
+    document.querySelectorAll('[data-range-slider]').forEach(function (slider) {
+      var minInput = slider.querySelector('[data-range-min]');
+      var maxInput = slider.querySelector('[data-range-max]');
+      var fill = slider.querySelector('[data-range-fill]');
+      var display = slider.parentElement.querySelector('[data-range-value]');
+
+      function update(movedInput) {
+        var min = parseFloat(minInput.value);
+        var max = parseFloat(maxInput.value);
+        if (min > max) {
+          if (movedInput === maxInput) {
+            min = max;
+            minInput.value = min;
+          } else {
+            max = min;
+            maxInput.value = max;
+          }
+        }
+        fill.style.left = (min * 100) + '%';
+        fill.style.width = ((max - min) * 100) + '%';
+        if (display) {
+          display.textContent = min.toFixed(2) + ' ~ ' + max.toFixed(2);
+        }
+      }
+
+      function bringToFront(el, other) {
+        el.style.zIndex = 5;
+        other.style.zIndex = 3;
+      }
+
+      minInput.addEventListener('pointerdown', function () { bringToFront(minInput, maxInput); });
+      maxInput.addEventListener('pointerdown', function () { bringToFront(maxInput, minInput); });
+      minInput.addEventListener('input', function () { update(minInput); });
+      maxInput.addEventListener('input', function () { update(maxInput); });
+      update();
+    });
+  })();
+</script>
 
 {% if show_chrome %}
 <script>
