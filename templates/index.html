@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Image Tag Search</title>
+<title>画像タグ検索システム</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
@@ -93,7 +93,7 @@
   </main>
   {% else %}
   <header class="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
-    {% set header_title = "Image Tag Search" %}
+    {% set header_title = "画像タグ検索システム" %}
     {% include "_header_title.html" %}
   </header>
   {% include "_menu.html" %}
