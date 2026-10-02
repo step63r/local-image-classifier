@@ -45,6 +45,9 @@ DEFAULT_GENERAL_MIN = 0.3
 DEFAULT_CHARACTER_MIN = 0.85
 SENSITIVE_RATINGS = ("sensitive", "questionable", "explicit")
 
+VALID_SORTS = ("relevance_desc", "relevance_asc", "tagged_at_desc")
+DEFAULT_SORT = "relevance_desc"
+
 app = Flask(__name__)
 app.config.update(
     # gunicorn runs multiple worker processes (no --preload), so this must be
@@ -205,6 +208,12 @@ def get_exclude_sensitive(source=None) -> bool:
     return source.get("exclude_sensitive") == "1"
 
 
+def get_sort(source=None) -> str:
+    source = request.args if source is None else source
+    value = source.get("sort", DEFAULT_SORT)
+    return value if value in VALID_SORTS else DEFAULT_SORT
+
+
 def like_pattern(term: str) -> str:
     escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
@@ -219,6 +228,7 @@ def search_images(
     ct_min: float,
     ct_max: float,
     exclude_sensitive: bool,
+    sort: str,
     page: int,
 ):
     offset = (page - 1) * PAGE_SIZE
@@ -259,15 +269,37 @@ def search_images(
 
     where = " AND ".join(conditions)
 
+    order_params: list = []
+    if sort == "tagged_at_desc":
+        order_by = "i.tagged_at DESC"
+    else:
+        # 検索語を先頭から優先するため、各語のconfidenceをORDER BYの別々の列として
+        # 並べる(SQLのORDER BYは複数列を左から順に、前の列が同点のときだけ次の列を
+        # 見て比較するため、これがそのまま「先頭語優先、同点なら次の語」という辞書式
+        # 順序になる)。1列の重み付き合計に丸めると、後続語が極端な値のときに先頭語
+        # の優先度が逆転し得るため採用しない。
+        direction = "ASC" if sort == "relevance_asc" else "DESC"
+        order_terms = []
+        for term, exact in tags:
+            tag_clause = "tg.tag = %s" if exact else "tg.tag LIKE %s ESCAPE '\\'"
+            order_terms.append(
+                f"COALESCE((SELECT MAX(tg.confidence) FROM tags tg "
+                f"WHERE tg.image_id = i.id AND {tag_clause} AND ({threshold_clause})), 0) {direction}"
+            )
+            order_params.extend(
+                [term if exact else like_pattern(term), ct_min, ct_max, gt_min, gt_max]
+            )
+        order_by = ", ".join(order_terms)
+
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT i.id, i.path FROM images i
             WHERE {where}
-            ORDER BY i.tagged_at DESC
+            ORDER BY {order_by}
             LIMIT %s OFFSET %s
             """,
-            (*params, PAGE_SIZE, offset),
+            (*params, *order_params, PAGE_SIZE, offset),
         )
         rows = cur.fetchall()
 
@@ -300,6 +332,7 @@ def build_url(
     ct_min: float,
     ct_max: float,
     exclude_sensitive: bool,
+    sort: str,
 ) -> str:
     params = {"page": page}
     if q:
@@ -314,6 +347,8 @@ def build_url(
     # detail back-link) don't fall back to the "absent" default -- see
     # get_exclude_sensitive().
     params["exclude_sensitive"] = "1" if exclude_sensitive else "0"
+    if sort != DEFAULT_SORT:
+        params["sort"] = sort
     return "/?" + urlencode(params)
 
 
@@ -373,15 +408,17 @@ def index():
     tags = parse_query(q)
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
     exclude_sensitive = get_exclude_sensitive()
-    # フォーム送信(検索実行)時は build_url/フォームの全フィールドが必ずクエリに
-    # 乗るため、素の "/" アクセス(クエリなし)と確実に区別できる。
-    has_searched = bool(request.args)
+    sort = get_sort()
+    # 関連度ソートは最低1つのタグ条件がないと計算できないため、空のクエリは
+    # そもそも検索として成立させない(フォーム側でも送信ボタンを無効化している
+    # -- _search_form.html参照)。folderのみでの絞り込みもここで弾かれる。
+    has_searched = bool(request.args) and bool(tags)
 
     if has_searched:
         conn = get_conn()
         try:
             rows, total = search_images(
-                conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, page
+                conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, sort, page
             )
             with conn.cursor() as cur:
                 is_saved = (
@@ -395,7 +432,7 @@ def index():
 
         has_next = page * PAGE_SIZE < total
         next_url = (
-            build_url(page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+            build_url(page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, sort)
             if has_next
             else None
         )
@@ -410,6 +447,7 @@ def index():
         ct_min=ct_min,
         ct_max=ct_max,
         exclude_sensitive=exclude_sensitive,
+        sort=sort,
         images=rows,
         total=total,
         page=page,
@@ -482,8 +520,11 @@ def detail(image_id: int):
     def tag_url(tag: str) -> str:
         # Quoted so parse_query() treats it as an exact-match term rather
         # than a substring search -- clicking a tag should search for that
-        # exact tag, not any tag containing it as a substring.
-        return build_url(1, f'"{tag}"', folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+        # exact tag, not any tag containing it as a substring. Always opens
+        # with the default (relevance) sort, same as a fresh search.
+        return build_url(
+            1, f'"{tag}"', folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, DEFAULT_SORT
+        )
 
     conn = get_conn()
     try:
@@ -523,6 +564,7 @@ def detail(image_id: int):
         ct_min=ct_min,
         ct_max=ct_max,
         exclude_sensitive=exclude_sensitive,
+        sort=DEFAULT_SORT,
         passes=passes,
         has_extra_tags=has_extra_tags,
         tag_url=tag_url,
@@ -593,7 +635,7 @@ def saved_searches():
             ),
             url=build_url(
                 1, r["q"], r["folder"], r["gt_min"], r["gt_max"], r["ct_min"], r["ct_max"],
-                r["exclude_sensitive"],
+                r["exclude_sensitive"], DEFAULT_SORT,
             ),
         )
         for r in rows

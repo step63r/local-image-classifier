@@ -12,11 +12,11 @@
     <div class="relative min-w-0 flex-1">
       <!-- text-base (16px): iOS Safariはフォーカス時のfont-sizeが16px未満だと
            ページ全体を自動ズームしてしまうため、text-smより小さくしない。 -->
-      <input type="text" name="q" value="{{ q }}"
+      <input type="text" name="q" id="searchInput" value="{{ q }}"
         placeholder="キーワードを入力"
         class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 pr-10 text-base sm:text-sm">
-      <button type="submit" aria-label="検索"
-        class="absolute inset-y-0 right-0 flex items-center px-3 text-neutral-400 hover:text-neutral-200">
+      <button type="submit" id="searchSubmitBtn" aria-label="検索"
+        class="absolute inset-y-0 right-0 flex items-center px-3 text-neutral-400 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
           stroke="currentColor" class="h-5 w-5">
           <path stroke-linecap="round" stroke-linejoin="round"
@@ -47,6 +47,12 @@
       <input type="text" name="folder" value="{{ folder }}"
         placeholder="フォルダで絞り込み"
         class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-56 sm:text-sm">
+      <select name="sort"
+        class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-56 sm:text-sm">
+        <option value="relevance_desc" {{ 'selected' if sort == 'relevance_desc' else '' }}>関連度が高い順</option>
+        <option value="relevance_asc" {{ 'selected' if sort == 'relevance_asc' else '' }}>関連度が低い順</option>
+        <option value="tagged_at_desc" {{ 'selected' if sort == 'tagged_at_desc' else '' }}>タグ付け日時が新しい順</option>
+      </select>
       <div class="flex flex-col gap-1 text-xs text-neutral-400 sm:w-48">
         <div class="flex items-center justify-between">
           <span>general</span>
@@ -89,6 +95,30 @@
     </div>
   </div>
 </form>
+
+<script>
+  (function () {
+    // 関連度ソートは検索語が無いと計算できないため、空文字での検索は送信自体を
+    // させない(エラー表示は出さず、ボタンを無効化するだけに留める -- 仕様判断)。
+    var input = document.getElementById('searchInput');
+    var submitBtn = document.getElementById('searchSubmitBtn');
+    if (!input || !submitBtn) return;
+
+    function updateState() {
+      submitBtn.disabled = input.value.trim() === '';
+    }
+
+    input.addEventListener('input', updateState);
+    updateState();
+
+    var form = input.closest('form');
+    form.addEventListener('submit', function (e) {
+      if (input.value.trim() === '') {
+        e.preventDefault();
+      }
+    });
+  })();
+</script>
 
 <script>
   (function () {
