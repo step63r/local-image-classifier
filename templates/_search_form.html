@@ -1,14 +1,5 @@
 <form method="get" action="/" class="flex flex-col">
   <div class="flex items-center gap-2 {{ 'h-14' if show_chrome else 'mt-2' }}">
-    {% if show_chrome %}
-    <a href="#" id="backLink" aria-label="戻る"
-      class="hidden shrink-0 text-neutral-400 hover:text-neutral-200">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-        stroke="currentColor" class="h-5 w-5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-      </svg>
-    </a>
-    {% endif %}
     <div class="relative min-w-0 flex-1">
       <!-- text-base (16px): iOS Safariはフォーカス時のfont-sizeが16px未満だと
            ページ全体を自動ズームしてしまうため、text-smより小さくしない。 -->
@@ -29,7 +20,7 @@
     {% endif %}
     {% if show_chrome %}
     <button type="button" id="menuBtn" aria-label="メニュー"
-      class="shrink-0 text-neutral-400 hover:text-neutral-200 lg:hidden">
+      class="shrink-0 px-2 text-neutral-400 hover:text-neutral-200 lg:hidden">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
         stroke="currentColor" class="h-5 w-5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
@@ -160,22 +151,3 @@
     });
   })();
 </script>
-
-{% if show_chrome %}
-<script>
-  (function () {
-    var backLink = document.getElementById('backLink');
-    if (backLink && document.referrer) {
-      try {
-        if (new URL(document.referrer).origin === window.location.origin) {
-          backLink.classList.remove('hidden');
-          backLink.addEventListener('click', function (e) {
-            e.preventDefault();
-            history.back();
-          });
-        }
-      } catch (e) {}
-    }
-  })();
-</script>
-{% endif %}

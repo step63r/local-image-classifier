@@ -2,21 +2,21 @@
      header要素の外(bodyの直下)に配置すること。 -->
 
 <!-- PC幅: 常時表示の左サイドバー(ハンバーガー/ドロワーの代わり) -->
-<aside class="fixed inset-y-0 left-0 z-10 hidden w-64 border-r border-neutral-800 bg-neutral-900 lg:block">
-  <div class="flex h-14 items-center border-b border-neutral-800 px-4">
+<aside class="fixed inset-y-0 left-0 z-10 hidden w-64 border-r border-neutral-800 bg-neutral-900 lg:flex lg:flex-col">
+  <div class="flex h-14 shrink-0 items-center border-b border-neutral-800 px-4">
     <span class="text-sm font-medium text-neutral-300">メニュー</span>
   </div>
-  <nav class="flex flex-col p-2">
+  <nav class="flex flex-1 flex-col p-2">
     <a href="/" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">TOP</a>
     <a href="/saved-searches" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">保存した検索条件</a>
-    <a href="/logout" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">ログアウト</a>
+    <a href="/logout" class="mb-4 mt-auto rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">ログアウト</a>
   </nav>
 </aside>
 
 <!-- モバイル/タブレット幅: ハンバーガーで開閉するオーバーレイ式ドロワー -->
 <div id="menuOverlay" class="fixed inset-0 z-30 hidden bg-black/50 lg:hidden" onclick="window.closeHeaderMenu()"></div>
 <div id="menuPanel"
-  class="fixed inset-y-0 right-0 z-40 w-64 max-w-[80vw] translate-x-full transform border-l border-neutral-800 bg-neutral-900 shadow-xl transition-transform duration-200 ease-out lg:hidden">
+  class="fixed inset-y-0 right-0 z-40 flex w-64 max-w-[80vw] translate-x-full transform flex-col border-l border-neutral-800 bg-neutral-900 shadow-xl transition-transform duration-200 ease-out lg:hidden">
   <div class="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
     <span class="text-sm font-medium text-neutral-300">メニュー</span>
     <button type="button" aria-label="閉じる" onclick="window.closeHeaderMenu()"
@@ -27,10 +27,10 @@
       </svg>
     </button>
   </div>
-  <nav class="flex flex-col p-2">
+  <nav class="flex flex-1 flex-col p-2">
     <a href="/" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">TOP</a>
     <a href="/saved-searches" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">保存した検索条件</a>
-    <a href="/logout" class="rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">ログアウト</a>
+    <a href="/logout" class="mb-4 mt-auto rounded px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">ログアウト</a>
   </nav>
 </div>
 
