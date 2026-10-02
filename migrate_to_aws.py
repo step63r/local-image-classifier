@@ -20,7 +20,8 @@ present in Postgres is skipped without touching S3 again.
 Incremental updates: after adding images locally, first re-run batch_tag.py
 against the E: drive (it skips files already tagged), then re-run this
 script the same way. Files deleted or moved locally are not detected or
-cleaned up; stale rows are left in place.
+cleaned up; stale rows are left in place. Images deleted from the search UI
+are recorded in deleted_images and are skipped here.
 """
 from __future__ import annotations
 
@@ -71,6 +72,13 @@ CREATE TABLE IF NOT EXISTS tags (
     category TEXT NOT NULL,
     confidence REAL NOT NULL,
     PRIMARY KEY (image_id, tag)
+);
+
+-- Paths deleted from the search UI. The local tags.db still has these rows, so
+-- without this list the next incremental run would migrate them back.
+CREATE TABLE IF NOT EXISTS deleted_images (
+    path TEXT PRIMARY KEY,
+    deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
@@ -266,6 +274,11 @@ def main() -> None:
         migrated_ids = {r["id"] for r in cur.fetchall()}
     logging.info("%d rows already present in Postgres", len(migrated_ids))
 
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT path FROM deleted_images")
+        deleted_paths = {r["path"] for r in cur.fetchall()}
+    logging.info("%d paths excluded (deleted from the search UI)", len(deleted_paths))
+
     done = skipped = errors = 0
     pending_commits = 0
     start = time.monotonic()
@@ -275,7 +288,7 @@ def main() -> None:
             for row in bar:
                 bar.set_postfix(done=done, skipped=skipped, errors=errors)
 
-                if row["id"] in migrated_ids:
+                if row["id"] in migrated_ids or row["path"] in deleted_paths:
                     skipped += 1
                     continue
 

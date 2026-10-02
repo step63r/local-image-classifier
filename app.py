@@ -144,7 +144,7 @@ def logout():
 def get_conn() -> psycopg2.extensions.connection:
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     # Autocommit avoids idle-in-transaction connections; the only writes are
-    # the saved-searches toggle/delete routes below, each a single statement.
+    # the saved-searches toggle/delete routes and delete_image below.
     conn.autocommit = True
     return conn
 
@@ -569,6 +569,45 @@ def detail(image_id: int):
         has_extra_tags=has_extra_tags,
         tag_url=tag_url,
     )
+
+
+@app.route("/detail/<int:image_id>/delete", methods=["POST"])
+@login_required
+def delete_image(image_id: int):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT path FROM images WHERE id = %s", (image_id,))
+            row = cur.fetchone()
+            if row is None:
+                abort(404)
+
+            # S3を先に消す: 逆順だとS3削除に失敗した時にDB行だけ消えて、
+            # 参照不能な孤児オブジェクトがバケットに残ってしまう。
+            # delete_objectsは存在しないキーでも成功するため再試行しても安全。
+            ext = Path(row["path"]).suffix.lower() or ".jpg"
+            s3.delete_objects(
+                Bucket=S3_BUCKET,
+                Delete={
+                    "Objects": [
+                        {"Key": f"original/{image_id}{ext}"},
+                        {"Key": f"thumb/{image_id}.jpg"},
+                    ],
+                    "Quiet": True,
+                },
+            )
+
+            # 先に除外リストへ記録する: migrate_to_aws.pyはローカルtags.dbを基準に
+            # 未移行分を再投入するため、記録が無いと次回の差分更新で復活する。
+            # autocommitで2文が別々に走るので、途中で失敗しても復活防止だけが残る順にしている。
+            cur.execute(
+                "INSERT INTO deleted_images (path) VALUES (%s) ON CONFLICT DO NOTHING",
+                (row["path"],),
+            )
+            cur.execute("DELETE FROM images WHERE id = %s", (image_id,))
+    finally:
+        conn.close()
+    return "", 204
 
 
 @app.route("/saved-searches/toggle", methods=["POST"])

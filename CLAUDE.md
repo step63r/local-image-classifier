@@ -69,7 +69,7 @@ AWS初回デプロイの全手順・既知の注意点は[infra/README.md](infra
 2. **移行**: `migrate_to_aws.py`が`tags.db`を読み、原本画像とサムネイルをS3へ、メタデータをPostgres(pgvector)へコピーする。`push_embeddings.py`/`backfill_embeddings.py`はembedding列を後付けするための一度きりの移行スクリプト。
 3. **サーバ(検索UI)**: `app.py`はPostgreSQL(`DATABASE_URL`)とS3(`S3_BUCKET`)のみを参照し、SQLiteには一切触れない。`requirements-server.txt`は`requirements.txt`から意図的にonnxruntime/opencv/huggingface_hub/tqdm/numpy/Pillowを除いた最小構成で、EC2にはこちらだけをデプロイする。
 
-`batch_tag.py`と`migrate_to_aws.py`はいずれも「同じコマンドをそのまま再実行すれば新規/未処理分だけ処理される」設計(冪等・再開可能)。ローカルでの削除・リネームは検出/反映されない(読み取り専用運用を前提に許容)。
+`batch_tag.py`と`migrate_to_aws.py`はいずれも「同じコマンドをそのまま再実行すれば新規/未処理分だけ処理される」設計(冪等・再開可能)。ローカルでの削除・リネームは検出/反映されない(読み取り専用運用を前提に許容)。検索UIの詳細画面から削除した画像はS3(original/thumb)とPostgresから消え、パスが`deleted_images`テーブルに記録されて`migrate_to_aws.py`の再実行でも復活しない(EC2ロールのS3削除権限は`app_stack.py`の`grant_delete`)。
 
 ### tagger/ の責務分割
 
@@ -90,4 +90,6 @@ AWS初回デプロイの全手順・既知の注意点は[infra/README.md](infra
 
 ### infra/ (AWS CDK)
 
-`infra/stacks/`に3スタック: `certificate_stack.py`(us-east-1のACM証明書)、`app_stack.py`(EC2 t4g.micro + 自前PostgreSQL/pgvector + S3 + CloudFront)、`waf_stack.py`。EC2にはSSH鍵も22番ポートも無く、管理アクセスはSystems Manager Session Managerのみ(ポートフォワードも`AWS-StartPortForwardingSession`で代替)。S3バケットは`RemovalPolicy.RETAIN`で`cdk destroy`しても消えない。ドメイン(`image-classifier.minatoproject.com`)のDNSはCloudflareで管理し、CNAMEは必ず「DNSのみ」(プロキシ無効)にする必要がある。
+`infra/stacks/`に3スタック: `certificate_stack.py`(us-east-1のACM証明書)、`app_stack.py`(EC2 t4g.micro + 自前PostgreSQL/pgvector + S3 + CloudFront)、`waf_stack.py`。EC2にはSSH鍵も22番ポートも無く、管理アクセスはSystems Manager Session Managerのみ(ポートフォワードも`AWS-StartPortForwardingSession`で代替)。S3バケットは`RemovalPolicy.RETAIN`で`cdk destroy`しても消えない。
+
+**EC2再作成の二重チェック(必須)**: PostgreSQLのデータはEC2のルートEBS上にあり、バックアップも別ボリュームも無いため、`ec2.Instance`が置き換わる(Replacement)と全データが失われる(過去に実際に発生)。`user_data`・AMI・インスタンスタイプ・ブロックデバイス・参照するAssetなど、EC2の再作成を招きうる変更(依存関係経由の変更も含む)を`infra/`に加える場合、Claudeは`cdk deploy`を案内する前に必ずユーザへ`cdk diff <スタック名>`の出力をClaude Codeに貼り付けるよう要求し、`AppInstance`に`Replacement`/`replace`が含まれないかを確認してから可否を伝える。diff出力を見ずに「デプロイして安全」とは言わない。Replacementが含まれる場合は、デプロイを止めてDBのバックアップ手段を先に提案する。`infra/`を変更しない場合でも、`system_setup.sh`等のAsset変更はuser_dataに波及するため同様に扱う。ドメイン(`image-classifier.minatoproject.com`)のDNSはCloudflareで管理し、CNAMEは必ず「DNSのみ」(プロキシ無効)にする必要がある。

@@ -43,13 +43,15 @@ class AppStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
-        # --- IAM: read-only S3 access + SSM (no open ports needed to debug) -
+        # --- IAM: S3 read/delete + SSM (no open ports needed to debug) -----
+        # delete is needed by the detail page's "delete image" action.
         instance_role = iam.Role(
             self,
             "AppInstanceRole",
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
         )
         bucket.grant_read(instance_role)
+        bucket.grant_delete(instance_role)
         instance_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore")
         )
