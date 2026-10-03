@@ -149,25 +149,46 @@ def get_conn() -> psycopg2.extensions.connection:
     return conn
 
 
-def parse_query(q: str) -> list[tuple[str, bool]]:
+# (term, exact, negated)
+Term = tuple[str, bool, bool]
+
+
+def parse_query(q: str) -> list[Term]:
     # Tags are separated by whitespace/commas; a multi-word tag itself (e.g.
     # from "azur lane") is written with underscores, as on booru-style tag
     # search boxes, and normalized here to match the space form stored in
     # the DB. A "double quoted phrase" is kept intact (spaces as typed) and
     # flagged for exact match, since a substring match on a tag containing
     # spaces would also match unrelated tags that merely contain one of the
-    # words.
-    terms: list[tuple[str, bool]] = []
-    for quoted, unquoted in re.findall(r'"([^"]*)"|(\S+)', q):
+    # words. A leading "-" (before a bare word or before a quoted phrase)
+    # flags the term as an exclusion.
+    terms: list[Term] = []
+    for minus, quoted, unquoted in re.findall(r'(-)?(?:"([^"]*)"|(\S+))', q):
         if quoted:
             term = quoted.strip()
             if term:
-                terms.append((term, True))
+                terms.append((term, True, bool(minus)))
         else:
-            for t in unquoted.replace(",", " ").split():
+            # The minus is re-attached so that comma-separated pieces
+            # ("-a,-b") are each judged for negation on their own.
+            for t in (minus + unquoted).replace(",", " ").split():
+                if t == "-":
+                    continue
+                # Tags made only of "-"/"_" (e.g. "-_-", an expression tag)
+                # are literal, not an exclusion of "_-"; to exclude one,
+                # quote it: -"- -".
+                negated = t.startswith("-") and t[1:].strip("-_") != ""
+                if negated:
+                    t = t[1:]
                 if t.strip():
-                    terms.append((t.replace("_", " ").strip(), False))
+                    terms.append((t.replace("_", " ").strip(), False, negated))
     return terms
+
+
+def has_positive_term(terms: list[Term]) -> bool:
+    # 関連度ソートは肯定語のconfidenceで並べるため、除外語だけのクエリは
+    # 検索として成立させない。
+    return any(not negated for _, _, negated in terms)
 
 
 def _float_arg(name: str, absent_default: float, empty_default: float, source=None) -> float:
@@ -221,7 +242,7 @@ def like_pattern(term: str) -> str:
 
 def search_images(
     conn: psycopg2.extensions.connection,
-    tags: list[tuple[str, bool]],
+    tags: list[Term],
     folder: str,
     gt_min: float,
     gt_max: float,
@@ -257,10 +278,13 @@ def search_images(
     # Each search term must match at least one tag on the image that also
     # falls within the current display range. Unquoted terms match by
     # substring; a "quoted phrase" requires an exact tag match instead.
-    for term, exact in tags:
+    # Excluded terms use the same tag match and the same display range, so
+    # a tag hidden by the current thresholds never removes an image.
+    for term, exact, negated in tags:
         tag_clause = "tg.tag = %s" if exact else "tg.tag LIKE %s ESCAPE '\\'"
+        exists = "NOT EXISTS" if negated else "EXISTS"
         conditions.append(
-            f"""EXISTS (
+            f"""{exists} (
                 SELECT 1 FROM tags tg
                 WHERE tg.image_id = i.id AND {tag_clause} AND ({threshold_clause})
             )"""
@@ -280,7 +304,9 @@ def search_images(
         # の優先度が逆転し得るため採用しない。
         direction = "ASC" if sort == "relevance_asc" else "DESC"
         order_terms = []
-        for term, exact in tags:
+        for term, exact, negated in tags:
+            if negated:
+                continue
             tag_clause = "tg.tag = %s" if exact else "tg.tag LIKE %s ESCAPE '\\'"
             order_terms.append(
                 f"COALESCE((SELECT MAX(tg.confidence) FROM tags tg "
@@ -424,7 +450,7 @@ def index():
     # 関連度ソートは最低1つのタグ条件がないと計算できないため、空のクエリは
     # そもそも検索として成立させない(フォーム側でも送信ボタンを無効化している
     # -- _search_form.html参照)。folderのみでの絞り込みもここで弾かれる。
-    has_searched = bool(request.args) and bool(tags)
+    has_searched = bool(request.args) and has_positive_term(tags)
 
     if has_searched:
         conn = get_conn()
@@ -532,7 +558,7 @@ def detail(image_id: int):
     sort = get_sort()
     # 検索として成立しない(タグ条件が無い)クエリの保存は意味がないため、
     # 星は遷移元が実際の検索だった場合にだけ出す -- index()のhas_searchedと同じ基準。
-    show_save_star = bool(parse_query(q))
+    show_save_star = has_positive_term(parse_query(q))
 
     def tag_url(tag: str) -> str:
         # Quoted so parse_query() treats it as an exact-match term rather
