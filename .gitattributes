@@ -1,0 +1,3 @@
+# core.autocrlf=true turns checked-out scripts into CRLF, which breaks the
+# shebang when infra/scripts/system_setup.sh runs on the Linux instance.
+*.sh text eol=lf
