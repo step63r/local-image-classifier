@@ -516,6 +516,11 @@ def detail(image_id: int):
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
     folder = request.args.get("folder", "").strip()
     exclude_sensitive = get_exclude_sensitive()
+    q = request.args.get("q", "").strip()
+    sort = get_sort()
+    # 検索として成立しない(タグ条件が無い)クエリの保存は意味がないため、
+    # 星は遷移元が実際の検索だった場合にだけ出す -- index()のhas_searchedと同じ基準。
+    show_save_star = bool(parse_query(q))
 
     def tag_url(tag: str) -> str:
         # Quoted so parse_query() treats it as an exact-match term rather
@@ -542,6 +547,10 @@ def detail(image_id: int):
             )
             tags = cur.fetchall()
             related = get_related_images(cur, image_id) if img["has_embedding"] else []
+            is_saved = show_save_star and (
+                find_saved_search(cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+                is not None
+            )
     finally:
         conn.close()
 
@@ -555,14 +564,14 @@ def detail(image_id: int):
     # 関連画像リンクにも同じクエリ文字列を引き継がせ、辿った先でも戻り先を失わないようにする。
     back_url = build_url(
         max(1, request.args.get("page", 1, type=int)),
-        request.args.get("q", "").strip(),
+        q,
         folder,
         gt_min,
         gt_max,
         ct_min,
         ct_max,
         exclude_sensitive,
-        get_sort(),
+        sort,
     )
 
     return render_template(
@@ -572,15 +581,17 @@ def detail(image_id: int):
         image=img,
         tags=tags,
         related=related,
-        # ヘッダーの検索フォームは詳細画面の遷移元クエリを引き継がず、常に空の状態で表示する。
-        q="",
-        folder="",
+        # ヘッダーの検索フォームと保存星は、遷移元の検索条件をそのまま引き継いで表示する。
+        q=q,
+        folder=folder,
         gt_min=gt_min,
         gt_max=gt_max,
         ct_min=ct_min,
         ct_max=ct_max,
         exclude_sensitive=exclude_sensitive,
-        sort=DEFAULT_SORT,
+        sort=sort,
+        show_save_star=show_save_star,
+        is_saved=is_saved,
         passes=passes,
         has_extra_tags=has_extra_tags,
         tag_url=tag_url,

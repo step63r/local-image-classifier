@@ -6,6 +6,7 @@
 <title>Image Detail</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <style>
   /* 横長画像で説明欄が全体幅の1/3未満になる場合、モバイルと同様に縦積みに強制する */
   #detailRow.force-stack { flex-direction: column !important; }
