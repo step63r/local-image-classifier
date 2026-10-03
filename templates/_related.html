@@ -1,0 +1,17 @@
+{% for r in related %}
+<a href="/detail/{{ r['id'] }}{{ '?' ~ context_qs if context_qs else '' }}" class="img-skeleton block aspect-square overflow-hidden rounded-lg">
+  <img src="/thumb/{{ r['id'] }}" loading="lazy" class="thumb h-full w-full object-cover" alt=""
+       onload="this.classList.add('loaded')" onerror="this.classList.add('loaded')">
+</a>
+{% endfor %}
+
+{% if related_next_url %}
+<div
+  hx-get="{{ related_next_url }}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  class="col-span-full py-6 text-center text-sm text-neutral-500"
+>
+  読み込み中...
+</div>
+{% endif %}

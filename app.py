@@ -309,18 +309,30 @@ def search_images(
     return rows, total
 
 
-def get_related_images(cur, image_id: int, limit: int = 12):
+RELATED_PAGE_SIZE = 12
+# 1回の詳細画面で辿れる関連画像の総数。深いOFFSETほどembedding全件の距離計算が重くなるため頭打ちにする。
+RELATED_MAX = 120
+
+
+def get_related_images(cur, image_id: int, offset: int = 0, limit: int = RELATED_PAGE_SIZE):
     # Only called when the source image has an embedding (see detail()) --
     # otherwise the subquery below returns NULL and `ORDER BY NULL` would
     # hand back an arbitrary, not actually related, set of rows.
+    # Fetches one extra row so the caller can tell whether another page
+    # exists without a separate COUNT over the embedding column. `id` is a
+    # tie-breaker so OFFSET paging stays stable between requests.
+    limit = min(limit, RELATED_MAX - offset)
+    if limit <= 0:
+        return [], False
     cur.execute(
         "SELECT id, path FROM images "
         "WHERE id != %s AND embedding IS NOT NULL "
-        "ORDER BY embedding <=> (SELECT embedding FROM images WHERE id = %s) "
-        "LIMIT %s",
-        (image_id, image_id, limit),
+        "ORDER BY embedding <=> (SELECT embedding FROM images WHERE id = %s), id "
+        "LIMIT %s OFFSET %s",
+        (image_id, image_id, limit + 1, offset),
     )
-    return cur.fetchall()
+    rows = cur.fetchall()
+    return rows[:limit], len(rows) > limit and offset + limit < RELATED_MAX
 
 
 def build_url(
@@ -546,7 +558,9 @@ def detail(image_id: int):
                 (image_id,),
             )
             tags = cur.fetchall()
-            related = get_related_images(cur, image_id) if img["has_embedding"] else []
+            related, related_has_next = (
+                get_related_images(cur, image_id) if img["has_embedding"] else ([], False)
+            )
             is_saved = show_save_star and (
                 find_saved_search(cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
                 is not None
@@ -581,6 +595,9 @@ def detail(image_id: int):
         image=img,
         tags=tags,
         related=related,
+        related_next_url=(
+            related_next_url(image_id, len(related), request.args) if related_has_next else None
+        ),
         # ヘッダーの検索フォームと保存星は、遷移元の検索条件をそのまま引き継いで表示する。
         q=q,
         folder=folder,
@@ -595,6 +612,41 @@ def detail(image_id: int):
         passes=passes,
         has_extra_tags=has_extra_tags,
         tag_url=tag_url,
+    )
+
+
+def related_next_url(image_id: int, offset: int, args) -> str:
+    # 遷移元の検索条件(戻り先)を関連画像リンクへ引き継ぐため、offset以外のクエリをそのまま渡す。
+    qs = urlencode([(k, v) for k, v in args.items(multi=True) if k != "offset"])
+    return f"/detail/{image_id}/related?offset={offset}" + (f"&{qs}" if qs else "")
+
+
+@app.route("/detail/<int:image_id>/related")
+@login_required
+def detail_related(image_id: int):
+    offset = max(0, request.args.get("offset", 0, type=int))
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT (embedding IS NOT NULL) AS has_embedding FROM images WHERE id = %s",
+                (image_id,),
+            )
+            img = cur.fetchone()
+            if img is None:
+                abort(404)
+            related, has_next = (
+                get_related_images(cur, image_id, offset) if img["has_embedding"] else ([], False)
+            )
+    finally:
+        conn.close()
+    return render_template(
+        "_related.html",
+        related=related,
+        related_next_url=(
+            related_next_url(image_id, offset + len(related), request.args) if has_next else None
+        ),
+        context_qs=urlencode([(k, v) for k, v in request.args.items(multi=True) if k != "offset"]),
     )
 
 
