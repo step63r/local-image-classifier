@@ -47,7 +47,80 @@ if ! /usr/bin/pg_config --version >/dev/null 2>&1; then
     }
 fi
 
-PG_DATA_DIR="/var/lib/pgsql/data"
+# --- PostgreSQL data volume --------------------------------------------------
+# The DB lives on a separate, RETAINed EBS volume so that replacing the
+# instance does not take the data with it. Everything here fails closed: if
+# the volume is not mounted we abort *before* initdb, otherwise a replaced
+# instance would silently start a fresh empty DB on the root disk.
+PG_HOME="/var/lib/pgsql"
+PG_VOLUME_LABEL="pgdata"
+
+if ! mountpoint -q "${PG_HOME}"; then
+    # CfnVolumeAttachment runs after the instance is created, so at first boot
+    # the disk may not be there yet. On Nitro instances the device name from
+    # CDK is not reliable (it shows up as nvme1n1), so pick the one disk that
+    # is not the root disk.
+    ROOT_DISK="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")"
+    DATA_DISK=""
+    for _ in $(seq 1 60); do
+        mapfile -t CANDIDATES < <(lsblk -dpno NAME,TYPE | awk -v root="${ROOT_DISK}" '$2=="disk" && $1!=root {print $1}')
+        if [ "${#CANDIDATES[@]}" -gt 1 ]; then
+            echo "expected exactly one non-root disk, found: ${CANDIDATES[*]}" >&2
+            exit 1
+        fi
+        if [ "${#CANDIDATES[@]}" -eq 1 ]; then
+            DATA_DISK="${CANDIDATES[0]}"
+            break
+        fi
+        echo "waiting for the PostgreSQL data volume to be attached..."
+        sleep 5
+    done
+    [ -n "${DATA_DISK}" ] || { echo "data volume was not attached in time -- aborting" >&2; exit 1; }
+
+    FS_TYPE=$(blkid -o value -s TYPE "${DATA_DISK}" || true)
+    FRESH_FS=0
+    if [ -z "${FS_TYPE}" ]; then
+        mkfs.xfs -L "${PG_VOLUME_LABEL}" "${DATA_DISK}"
+        FRESH_FS=1
+    elif [ "$(blkid -o value -s LABEL "${DATA_DISK}" || true)" != "${PG_VOLUME_LABEL}" ]; then
+        echo "${DATA_DISK} already has a filesystem that is not labelled ${PG_VOLUME_LABEL} -- refusing to touch it" >&2
+        exit 1
+    fi
+
+    # nofail so a missing volume does not hang boot; postgresql itself is held
+    # back by the RequiresMountsFor drop-in below instead.
+    grep -q "^LABEL=${PG_VOLUME_LABEL} " /etc/fstab || \
+        echo "LABEL=${PG_VOLUME_LABEL} ${PG_HOME} xfs defaults,nofail 0 2" >> /etc/fstab
+
+    systemctl stop postgresql 2>/dev/null || true
+    mkdir -p "${PG_HOME}"
+
+    # Carry over a DB that already exists on the root disk (instance created
+    # before the separate volume existed). The original files stay under the
+    # mount point as a rollback copy, hidden once the volume is mounted.
+    if [ "${FRESH_FS}" -eq 1 ] && [ -f "${PG_HOME}/data/PG_VERSION" ]; then
+        mkdir -p /mnt/pgdata-new
+        mount "${DATA_DISK}" /mnt/pgdata-new
+        cp -a "${PG_HOME}/." /mnt/pgdata-new/
+        umount /mnt/pgdata-new
+    fi
+
+    mount "${PG_HOME}"
+fi
+
+mountpoint -q "${PG_HOME}" || { echo "${PG_HOME} is not a mount point -- aborting before initdb" >&2; exit 1; }
+chown postgres:postgres "${PG_HOME}"
+chmod 700 "${PG_HOME}"
+command -v restorecon >/dev/null 2>&1 && restorecon -R "${PG_HOME}" || true
+
+mkdir -p /etc/systemd/system/postgresql.service.d
+cat > /etc/systemd/system/postgresql.service.d/data-volume.conf <<EOF
+[Unit]
+RequiresMountsFor=${PG_HOME}
+EOF
+systemctl daemon-reload
+
+PG_DATA_DIR="${PG_HOME}/data"
 if [ ! -f "${PG_DATA_DIR}/PG_VERSION" ]; then
     /usr/bin/postgresql-setup --initdb
 fi

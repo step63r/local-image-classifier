@@ -1,7 +1,8 @@
-from aws_cdk import CfnOutput, Duration, Fn, RemovalPolicy, Stack
+from aws_cdk import CfnOutput, CfnTag, Duration, Fn, RemovalPolicy, Size, Stack, Tags
 from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
+from aws_cdk import aws_dlm as dlm
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
@@ -10,6 +11,10 @@ from constructs import Construct
 
 APP_PORT = 8000
 DEFAULT_VPC_ID = "vpc-02446d835e9eb0076"
+PG_DATA_VOLUME_GIB = 10
+BACKUP_TAG_KEY = "Backup"
+BACKUP_TAG_VALUE = "pgdata"
+SNAPSHOT_RETAIN_COUNT = 7
 
 
 class AppStack(Stack):
@@ -112,6 +117,75 @@ class AppStack(Stack):
                 )
             ],
             user_data=user_data,
+        )
+
+        # --- PostgreSQL data volume (separate from the root EBS) -----------------
+        # The DB used to live on the root volume, so an instance Replacement
+        # wiped it. RETAIN keeps this volume through instance replacement and
+        # stack deletion; system_setup.sh mounts it at /var/lib/pgsql.
+        # The AZ is taken from the same subnet Instance picks (subnets[0] of the
+        # selection) instead of instance.instance_availability_zone: that
+        # GetAtt would make the volume itself Replace if the instance ever
+        # landed in another AZ, leaving an empty new volume behind.
+        data_subnet = vpc.select_subnets(subnet_type=ec2.SubnetType.PUBLIC).subnets[0]
+        data_volume = ec2.Volume(
+            self,
+            "PgDataVolume",
+            availability_zone=data_subnet.availability_zone,
+            size=Size.gibibytes(PG_DATA_VOLUME_GIB),
+            volume_type=ec2.EbsDeviceVolumeType.GP3,
+            encrypted=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        Tags.of(data_volume).add(BACKUP_TAG_KEY, BACKUP_TAG_VALUE)
+        # The device name is only a hint on Nitro (t4g) instances, where it
+        # shows up as /dev/nvme1n1; system_setup.sh finds the disk by elimination.
+        ec2.CfnVolumeAttachment(
+            self,
+            "PgDataAttachment",
+            instance_id=instance.instance_id,
+            volume_id=data_volume.volume_id,
+            device="/dev/sdf",
+        )
+
+        # --- Daily snapshots of the data volume -------------------------------
+        # The retained volume protects against instance replacement only; the
+        # snapshots cover volume deletion/corruption. Snapshots are crash
+        # consistent, which PostgreSQL recovers from via WAL (WAL is on the
+        # same volume).
+        dlm_role = iam.Role(
+            self,
+            "DlmRole",
+            assumed_by=iam.ServicePrincipal("dlm.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSDataLifecycleManagerServiceRole"
+                )
+            ],
+        )
+        dlm.CfnLifecyclePolicy(
+            self,
+            "PgDataSnapshotPolicy",
+            description="Daily snapshots of the PostgreSQL data volume",
+            state="ENABLED",
+            execution_role_arn=dlm_role.role_arn,
+            policy_details=dlm.CfnLifecyclePolicy.PolicyDetailsProperty(
+                resource_types=["VOLUME"],
+                target_tags=[CfnTag(key=BACKUP_TAG_KEY, value=BACKUP_TAG_VALUE)],
+                schedules=[
+                    dlm.CfnLifecyclePolicy.ScheduleProperty(
+                        name="daily",
+                        # 18:00 UTC = 03:00 JST
+                        create_rule=dlm.CfnLifecyclePolicy.CreateRuleProperty(
+                            interval=24, interval_unit="HOURS", times=["18:00"]
+                        ),
+                        retain_rule=dlm.CfnLifecyclePolicy.RetainRuleProperty(
+                            count=SNAPSHOT_RETAIN_COUNT
+                        ),
+                        copy_tags=True,
+                    )
+                ],
+            ),
         )
 
         # --- Elastic IP: keeps the CloudFront origin + SSM tunnel target stable
@@ -221,5 +295,6 @@ class AppStack(Stack):
 
         CfnOutput(self, "InstanceId", value=instance.instance_id)
         CfnOutput(self, "InstancePublicIp", value=eip.ref)
+        CfnOutput(self, "PgDataVolumeId", value=data_volume.volume_id)
         CfnOutput(self, "MediaBucketName", value=bucket.bucket_name)
         CfnOutput(self, "DistributionDomainName", value=distribution.distribution_domain_name)
