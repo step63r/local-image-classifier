@@ -115,10 +115,12 @@
   <div class="mx-auto max-w-5xl px-4 py-4">
     <div id="detailRow" class="flex flex-col gap-4 md:flex-row">
       <div id="detailImgWrap" class="w-full md:w-auto">
-        <img id="detailImg" src="/image/{{ image['id'] }}" alt=""
-          class="max-h-[80vh] w-full rounded-lg object-contain md:w-auto"
-          onload="this.classList.add('loaded'); this.parentElement.classList.add('loaded')"
-          onerror="this.classList.add('loaded'); this.parentElement.classList.add('loaded')">
+        <a href="/image/{{ image['id'] }}" target="_blank" rel="noopener" class="block">
+          <img id="detailImg" src="/image/{{ image['id'] }}" alt=""
+            class="max-h-[80vh] w-full rounded-lg object-contain md:w-auto"
+            onload="this.classList.add('loaded'); document.getElementById('detailImgWrap').classList.add('loaded')"
+            onerror="this.classList.add('loaded'); document.getElementById('detailImgWrap').classList.add('loaded')">
+        </a>
       </div>
 
       <div class="min-w-0 flex-1">
@@ -267,7 +269,7 @@
       if (img.complete) {
         updateLayout();
         img.classList.add('loaded');
-        img.parentElement.classList.add('loaded');
+        document.getElementById('detailImgWrap').classList.add('loaded');
       }
     })();
   </script>
