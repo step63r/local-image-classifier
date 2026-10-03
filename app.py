@@ -551,8 +551,24 @@ def detail(image_id: int):
 
     has_extra_tags = any(not passes(t) for t in tags)
 
+    # 削除後に遷移元の検索結果へ戻すため、グリッドから渡された検索条件でURLを組み直す。
+    # 関連画像リンクにも同じクエリ文字列を引き継がせ、辿った先でも戻り先を失わないようにする。
+    back_url = build_url(
+        max(1, request.args.get("page", 1, type=int)),
+        request.args.get("q", "").strip(),
+        folder,
+        gt_min,
+        gt_max,
+        ct_min,
+        ct_max,
+        exclude_sensitive,
+        get_sort(),
+    )
+
     return render_template(
         "detail.html",
+        back_url=back_url,
+        context_qs=request.query_string.decode(),
         image=img,
         tags=tags,
         related=related,

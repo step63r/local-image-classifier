@@ -155,7 +155,7 @@
       <h2 class="mb-3 text-[clamp(0.8rem,0.7rem+0.4vw,1.05rem)] text-neutral-400">関連画像</h2>
       <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
         {% for r in related %}
-        <a href="/detail/{{ r['id'] }}" class="img-skeleton block aspect-square overflow-hidden rounded-lg">
+        <a href="/detail/{{ r['id'] }}{{ '?' ~ context_qs if context_qs else '' }}" class="img-skeleton block aspect-square overflow-hidden rounded-lg">
           <img src="/thumb/{{ r['id'] }}" loading="lazy" class="thumb h-full w-full object-cover" alt=""
                onload="this.classList.add('loaded')" onerror="this.classList.add('loaded')">
         </a>
@@ -211,7 +211,7 @@
         fetch('/detail/{{ image["id"] }}/delete', { method: 'POST', credentials: 'same-origin' })
           .then(function (res) {
             if (!res.ok) throw new Error('HTTP ' + res.status);
-            window.location.href = '/';
+            window.location.href = {{ back_url | tojson }};
           })
           .catch(function (err) {
             errorEl.textContent = '削除に失敗しました (' + err.message + ')';
