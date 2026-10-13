@@ -9,6 +9,7 @@ CloudFront cache-key implications of that design.
 from __future__ import annotations
 
 import hmac
+import ntpath
 import os
 import re
 import secrets
@@ -44,9 +45,24 @@ PAGE_SIZE = 40
 DEFAULT_GENERAL_MIN = 0.3
 DEFAULT_CHARACTER_MIN = 0.85
 SENSITIVE_RATINGS = ("sensitive", "questionable", "explicit")
+# パラメータには SENSITIVE_RATINGS を渡す。
+SENSITIVE_EXCLUSION = f"""NOT EXISTS (
+    SELECT 1 FROM tags tg
+    WHERE tg.image_id = i.id AND tg.category = 'rating'
+      AND tg.tag IN ({", ".join(["%s"] * len(SENSITIVE_RATINGS))})
+)"""
 
 VALID_SORTS = ("relevance_desc", "relevance_asc", "tagged_at_desc")
 DEFAULT_SORT = "relevance_desc"
+
+# フォルダ一覧の並び順。値はそのままORDER BYへ埋め込むので、キーはここで列挙したものだけ受け付ける。
+FOLDER_ORDERS = {
+    "mtime_desc": ("ファイル更新日時が新しい順", "i.mtime DESC"),
+    "mtime_asc": ("ファイル更新日時が古い順", "i.mtime ASC"),
+    "tagged_desc": ("タグ付け日時が新しい順", "i.tagged_at DESC"),
+    "tagged_asc": ("タグ付け日時が古い順", "i.tagged_at ASC"),
+}
+DEFAULT_FOLDER_ORDER = "mtime_desc"
 
 app = Flask(__name__)
 app.config.update(
@@ -266,13 +282,7 @@ def search_images(
         params.append(like_pattern(folder))
 
     if exclude_sensitive:
-        placeholders = ", ".join(["%s"] * len(SENSITIVE_RATINGS))
-        conditions.append(
-            f"""NOT EXISTS (
-                SELECT 1 FROM tags tg
-                WHERE tg.image_id = i.id AND tg.category = 'rating' AND tg.tag IN ({placeholders})
-            )"""
-        )
+        conditions.append(SENSITIVE_EXCLUSION)
         params.extend(SENSITIVE_RATINGS)
 
     # Each search term must match at least one tag on the image that also
@@ -326,6 +336,54 @@ def search_images(
             LIMIT %s OFFSET %s
             """,
             (*params, *order_params, PAGE_SIZE, offset),
+        )
+        rows = cur.fetchall()
+
+        cur.execute(f"SELECT COUNT(*) AS count FROM images i WHERE {where}", params)
+        total = cur.fetchone()["count"]
+
+    return rows, total
+
+
+def folder_prefix(directory: str) -> str:
+    # ドライブ直下(`E:\`)は既にセパレータで終わっているため二重に付けない。
+    return directory if directory.endswith("\\") else directory + "\\"
+
+
+def folder_images(
+    conn: psycopg2.extensions.connection,
+    directory: str,
+    exclude_sensitive: bool,
+    order: str,
+    page: int,
+):
+    prefix = folder_prefix(directory)
+    # LIKEだとパス中の`\` `%` `_`のエスケープが要るため、先頭一致は文字列比較で行う。
+    # 直下のみ対象にするため、接頭辞以降にセパレータが残る(=サブフォルダ配下)行は除く。
+    conditions = [
+        "i.status = 'done'",
+        "left(i.path, %s) = %s",
+        "strpos(substr(i.path, %s), %s) = 0",
+    ]
+    params: list = [len(prefix), prefix, len(prefix) + 1, "\\"]
+
+    if exclude_sensitive:
+        conditions.append(SENSITIVE_EXCLUSION)
+        params.extend(SENSITIVE_RATINGS)
+
+    where = " AND ".join(conditions)
+    order_by = FOLDER_ORDERS[order][1]
+    offset = (page - 1) * PAGE_SIZE
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT i.id, i.path FROM images i
+            WHERE {where}
+            ORDER BY {order_by}, i.id
+            LIMIT %s OFFSET %s
+            """,
+            (*params, PAGE_SIZE, offset),
         )
         rows = cur.fetchall()
 
@@ -613,10 +671,22 @@ def detail(image_id: int):
         exclude_sensitive,
         sort,
     )
+    # フォルダ一覧から開いた場合は、削除後にそのフォルダ一覧へ戻す。
+    if request.args.get("back"):
+        back_url = _safe_next(request.args["back"])
+
+    # DBのパスはWindows形式で、アプリはLinux上で動くため os.path ではなく ntpath で分割する。
+    dir_url = "/folder?" + urlencode(
+        {
+            "dir": ntpath.dirname(img["path"]),
+            "exclude_sensitive": "1" if exclude_sensitive else "0",
+        }
+    )
 
     return render_template(
         "detail.html",
         back_url=back_url,
+        dir_url=dir_url,
         context_qs=request.query_string.decode(),
         image=img,
         tags=tags,
@@ -673,6 +743,64 @@ def detail_related(image_id: int):
             related_next_url(image_id, offset + len(related), request.args) if has_next else None
         ),
         context_qs=urlencode([(k, v) for k, v in request.args.items(multi=True) if k != "offset"]),
+    )
+
+
+def folder_url(directory: str, order: str, exclude_sensitive: bool, page: int = 1) -> str:
+    params = {
+        "dir": directory,
+        "order": order,
+        "exclude_sensitive": "1" if exclude_sensitive else "0",
+    }
+    if page > 1:
+        params["page"] = page
+    return "/folder?" + urlencode(params)
+
+
+@app.route("/folder")
+@login_required
+def folder_view():
+    directory = request.args.get("dir", "").strip()
+    if not directory:
+        return redirect("/")
+    order = request.args.get("order", DEFAULT_FOLDER_ORDER)
+    if order not in FOLDER_ORDERS:
+        order = DEFAULT_FOLDER_ORDER
+    page = max(1, request.args.get("page", 1, type=int))
+    exclude_sensitive = get_exclude_sensitive()
+
+    conn = get_conn()
+    try:
+        rows, total = folder_images(conn, directory, exclude_sensitive, order, page)
+    finally:
+        conn.close()
+
+    has_next = page * PAGE_SIZE < total
+    context = dict(
+        directory=directory,
+        images=rows,
+        total=total,
+        has_next=has_next,
+        next_url=folder_url(directory, order, exclude_sensitive, page + 1) if has_next else None,
+        # 詳細画面の「削除後の戻り先」兼、関連画像リンクへ引き継ぐクエリ。
+        detail_qs=urlencode(
+            {
+                "exclude_sensitive": "1" if exclude_sensitive else "0",
+                "back": folder_url(directory, order, exclude_sensitive),
+            }
+        ),
+    )
+
+    if request.headers.get("HX-Request"):
+        return render_template("_folder_grid.html", **context)
+    return render_template(
+        "folder.html",
+        order=order,
+        order_links=[
+            (label, folder_url(directory, key, exclude_sensitive), key == order)
+            for key, (label, _) in FOLDER_ORDERS.items()
+        ],
+        **context,
     )
 
 

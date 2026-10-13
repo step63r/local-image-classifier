@@ -86,6 +86,7 @@ AWS初回デプロイの全手順・既知の注意点は[infra/README.md](infra
 - `parse_query()`がタグ検索クエリを解析し、`"引用符"`は完全一致、それ以外は部分一致(LIKE)として扱う。アンダースコアはDB格納形式(スペース)に正規化される。
 - `search_images()`はタグ・フォルダ・カテゴリ別しきい値・センシティブレーティング除外を動的にSQL条件へ組み立てる。
 - `get_related_images()`はpgvectorのコサイン距離(`<=>`)でembeddingを持つ画像同士の類似検索を行う(embeddingが無い画像では呼び出されない)。
+- `/folder?dir=<フォルダパス>`は詳細画面のファイルパスリンクの遷移先で、そのフォルダ直下(サブフォルダ除く)の画像を一覧する。DBのパスはWindows形式(`\`区切り)だがEC2はLinuxなので、親フォルダ算出は`ntpath`、直下判定は`folder_images()`の接頭辞比較で行う。並び順は`FOLDER_ORDERS`(既定: ファイル更新日時の新しい順)。
 - htmx(`HX-Request`ヘッダ)によりページ全体とグリッド部分(`_grid.html`)のレンダリングを切り替えている。
 
 ### infra/ (AWS CDK)
