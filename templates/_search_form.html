@@ -35,7 +35,7 @@
       詳細
     </button>
     <div id="filters-panel" class="hidden flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-      <input type="text" name="folder" value="{{ folder }}"
+      <input type="text" name="folder" id="folderInput" value="{{ folder }}"
         placeholder="フォルダで絞り込み"
         class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-56 sm:text-sm">
       <select name="sort"
@@ -43,6 +43,9 @@
         <option value="relevance_desc" {{ 'selected' if sort == 'relevance_desc' else '' }}>関連度が高い順</option>
         <option value="relevance_asc" {{ 'selected' if sort == 'relevance_asc' else '' }}>関連度が低い順</option>
         <option value="tagged_at_desc" {{ 'selected' if sort == 'tagged_at_desc' else '' }}>タグ付け日時が新しい順</option>
+        <option value="tagged_at_asc" {{ 'selected' if sort == 'tagged_at_asc' else '' }}>タグ付け日時が古い順</option>
+        <option value="mtime_desc" {{ 'selected' if sort == 'mtime_desc' else '' }}>ファイル更新日時が新しい順</option>
+        <option value="mtime_asc" {{ 'selected' if sort == 'mtime_asc' else '' }}>ファイル更新日時が古い順</option>
       </select>
       <div class="flex flex-col gap-1 text-xs text-neutral-400 sm:w-48">
         <div class="flex items-center justify-between">
@@ -89,22 +92,29 @@
 
 <script>
   (function () {
-    // 関連度ソートは検索語が無いと計算できないため、空文字での検索は送信自体を
-    // させない(エラー表示は出さず、ボタンを無効化するだけに留める -- 仕様判断)。
+    // キーワードもフォルダも空の検索は成立しない(関連度ソートの基準が無く、
+    // 全件表示にもなってしまう)ため送信自体をさせない(エラー表示は出さず、
+    // ボタンを無効化するだけに留める -- 仕様判断)。フォルダのみは許容する。
     var input = document.getElementById('searchInput');
+    var folderInput = document.getElementById('folderInput');
     var submitBtn = document.getElementById('searchSubmitBtn');
-    if (!input || !submitBtn) return;
+    if (!input || !folderInput || !submitBtn) return;
+
+    function isEmpty() {
+      return input.value.trim() === '' && folderInput.value.trim() === '';
+    }
 
     function updateState() {
-      submitBtn.disabled = input.value.trim() === '';
+      submitBtn.disabled = isEmpty();
     }
 
     input.addEventListener('input', updateState);
+    folderInput.addEventListener('input', updateState);
     updateState();
 
     var form = input.closest('form');
     form.addEventListener('submit', function (e) {
-      if (input.value.trim() === '') {
+      if (isEmpty()) {
         e.preventDefault();
       }
     });

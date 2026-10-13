@@ -52,17 +52,18 @@ SENSITIVE_EXCLUSION = f"""NOT EXISTS (
       AND tg.tag IN ({", ".join(["%s"] * len(SENSITIVE_RATINGS))})
 )"""
 
-VALID_SORTS = ("relevance_desc", "relevance_asc", "tagged_at_desc")
+VALID_SORTS = ("relevance_desc", "relevance_asc", "tagged_at_desc", "tagged_at_asc", "mtime_desc", "mtime_asc")
 DEFAULT_SORT = "relevance_desc"
 
-# フォルダ一覧の並び順。値はそのままORDER BYへ埋め込むので、キーはここで列挙したものだけ受け付ける。
-FOLDER_ORDERS = {
-    "mtime_desc": ("ファイル更新日時が新しい順", "i.mtime DESC"),
-    "mtime_asc": ("ファイル更新日時が古い順", "i.mtime ASC"),
-    "tagged_desc": ("タグ付け日時が新しい順", "i.tagged_at DESC"),
-    "tagged_asc": ("タグ付け日時が古い順", "i.tagged_at ASC"),
+# 関連度以外の並び順。値はそのままORDER BYへ埋め込むので、ここで列挙したキーだけ受け付ける。
+COLUMN_SORTS = {
+    "tagged_at_desc": "i.tagged_at DESC",
+    "tagged_at_asc": "i.tagged_at ASC",
+    "mtime_desc": "i.mtime DESC",
+    "mtime_asc": "i.mtime ASC",
 }
-DEFAULT_FOLDER_ORDER = "mtime_desc"
+# フォルダのみの検索(タグ語なし)は関連度を計算できないため、この並び順で代替する。
+FOLDER_ONLY_SORT = "mtime_desc"
 
 app = Flask(__name__)
 app.config.update(
@@ -207,6 +208,13 @@ def has_positive_term(terms: list[Term]) -> bool:
     return any(not negated for _, _, negated in terms)
 
 
+def is_searchable(terms: list[Term], folder: str) -> bool:
+    # 肯定語が無くても、フォルダ指定があれば検索として成立させる(並び順は
+    # 関連度ではなく FOLDER_ONLY_SORT へ代替 -- index()参照)。除外語だけの
+    # クエリは従来どおり成立しない。
+    return has_positive_term(terms) or bool(folder)
+
+
 def _float_arg(name: str, absent_default: float, empty_default: float, source=None) -> float:
     # Distinguishes "param not in the querystring" (fresh page load -> use
     # the friendly default) from "param present but cleared by the user"
@@ -304,8 +312,9 @@ def search_images(
     where = " AND ".join(conditions)
 
     order_params: list = []
-    if sort == "tagged_at_desc":
-        order_by = "i.tagged_at DESC"
+    if sort in COLUMN_SORTS:
+        # 同値(同一mtimeなど)でもOFFSETページングが安定するようidで決着をつける。
+        order_by = f"{COLUMN_SORTS[sort]}, i.id"
     else:
         # 検索語を先頭から優先するため、各語のconfidenceをORDER BYの別々の列として
         # 並べる(SQLのORDER BYは複数列を左から順に、前の列が同点のときだけ次の列を
@@ -336,54 +345,6 @@ def search_images(
             LIMIT %s OFFSET %s
             """,
             (*params, *order_params, PAGE_SIZE, offset),
-        )
-        rows = cur.fetchall()
-
-        cur.execute(f"SELECT COUNT(*) AS count FROM images i WHERE {where}", params)
-        total = cur.fetchone()["count"]
-
-    return rows, total
-
-
-def folder_prefix(directory: str) -> str:
-    # ドライブ直下(`E:\`)は既にセパレータで終わっているため二重に付けない。
-    return directory if directory.endswith("\\") else directory + "\\"
-
-
-def folder_images(
-    conn: psycopg2.extensions.connection,
-    directory: str,
-    exclude_sensitive: bool,
-    order: str,
-    page: int,
-):
-    prefix = folder_prefix(directory)
-    # LIKEだとパス中の`\` `%` `_`のエスケープが要るため、先頭一致は文字列比較で行う。
-    # 直下のみ対象にするため、接頭辞以降にセパレータが残る(=サブフォルダ配下)行は除く。
-    conditions = [
-        "i.status = 'done'",
-        "left(i.path, %s) = %s",
-        "strpos(substr(i.path, %s), %s) = 0",
-    ]
-    params: list = [len(prefix), prefix, len(prefix) + 1, "\\"]
-
-    if exclude_sensitive:
-        conditions.append(SENSITIVE_EXCLUSION)
-        params.extend(SENSITIVE_RATINGS)
-
-    where = " AND ".join(conditions)
-    order_by = FOLDER_ORDERS[order][1]
-    offset = (page - 1) * PAGE_SIZE
-
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT i.id, i.path FROM images i
-            WHERE {where}
-            ORDER BY {order_by}, i.id
-            LIMIT %s OFFSET %s
-            """,
-            (*params, PAGE_SIZE, offset),
         )
         rows = cur.fetchall()
 
@@ -505,10 +466,14 @@ def index():
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
     exclude_sensitive = get_exclude_sensitive()
     sort = get_sort()
-    # 関連度ソートは最低1つのタグ条件がないと計算できないため、空のクエリは
-    # そもそも検索として成立させない(フォーム側でも送信ボタンを無効化している
-    # -- _search_form.html参照)。folderのみでの絞り込みもここで弾かれる。
-    has_searched = bool(request.args) and has_positive_term(tags)
+    # 関連度ソートは最低1つの肯定タグ条件がないと計算できないため、キーワードも
+    # フォルダも空のクエリは検索として成立させない(フォーム側でも送信ボタンを
+    # 無効化している -- _search_form.html参照)。
+    has_searched = bool(request.args) and is_searchable(tags, folder)
+    # フォルダのみの検索で関連度ソートが選ばれていると並べ替えの基準が無い。
+    # ドロップダウンの表示と実際の並びがずれないよう、sort自体を差し替える。
+    if has_searched and not has_positive_term(tags) and sort not in COLUMN_SORTS:
+        sort = FOLDER_ONLY_SORT
 
     if has_searched:
         conn = get_conn()
@@ -616,7 +581,7 @@ def detail(image_id: int):
     sort = get_sort()
     # 検索として成立しない(タグ条件が無い)クエリの保存は意味がないため、
     # 星は遷移元が実際の検索だった場合にだけ出す -- index()のhas_searchedと同じ基準。
-    show_save_star = has_positive_term(parse_query(q))
+    show_save_star = is_searchable(parse_query(q), folder)
 
     def tag_url(tag: str) -> str:
         # Quoted so parse_query() treats it as an exact-match term rather
@@ -671,16 +636,21 @@ def detail(image_id: int):
         exclude_sensitive,
         sort,
     )
-    # フォルダ一覧から開いた場合は、削除後にそのフォルダ一覧へ戻す。
-    if request.args.get("back"):
-        back_url = _safe_next(request.args["back"])
-
-    # DBのパスはWindows形式で、アプリはLinux上で動くため os.path ではなく ntpath で分割する。
-    dir_url = "/folder?" + urlencode(
-        {
-            "dir": ntpath.dirname(img["path"]),
-            "exclude_sensitive": "1" if exclude_sensitive else "0",
-        }
+    # パスのリンクは「キーワード空・フォルダ絞り込みのみ」の検索へ飛ばす。DBのパスは
+    # Windows形式で、アプリはLinux上で動くため os.path ではなく ntpath で分割する。
+    # folderはLIKEの部分一致なので、末尾の`\`を付けて「001_アニメ」が「001_アニメ2」にも
+    # 当たるような接頭辞違いのフォルダ混入を防ぐ(サブフォルダ配下は含まれる)。
+    parent = ntpath.dirname(img["path"])
+    dir_url = build_url(
+        1,
+        "",
+        parent if parent.endswith("\\") else parent + "\\",
+        gt_min,
+        gt_max,
+        ct_min,
+        ct_max,
+        exclude_sensitive,
+        FOLDER_ONLY_SORT,
     )
 
     return render_template(
@@ -743,64 +713,6 @@ def detail_related(image_id: int):
             related_next_url(image_id, offset + len(related), request.args) if has_next else None
         ),
         context_qs=urlencode([(k, v) for k, v in request.args.items(multi=True) if k != "offset"]),
-    )
-
-
-def folder_url(directory: str, order: str, exclude_sensitive: bool, page: int = 1) -> str:
-    params = {
-        "dir": directory,
-        "order": order,
-        "exclude_sensitive": "1" if exclude_sensitive else "0",
-    }
-    if page > 1:
-        params["page"] = page
-    return "/folder?" + urlencode(params)
-
-
-@app.route("/folder")
-@login_required
-def folder_view():
-    directory = request.args.get("dir", "").strip()
-    if not directory:
-        return redirect("/")
-    order = request.args.get("order", DEFAULT_FOLDER_ORDER)
-    if order not in FOLDER_ORDERS:
-        order = DEFAULT_FOLDER_ORDER
-    page = max(1, request.args.get("page", 1, type=int))
-    exclude_sensitive = get_exclude_sensitive()
-
-    conn = get_conn()
-    try:
-        rows, total = folder_images(conn, directory, exclude_sensitive, order, page)
-    finally:
-        conn.close()
-
-    has_next = page * PAGE_SIZE < total
-    context = dict(
-        directory=directory,
-        images=rows,
-        total=total,
-        has_next=has_next,
-        next_url=folder_url(directory, order, exclude_sensitive, page + 1) if has_next else None,
-        # 詳細画面の「削除後の戻り先」兼、関連画像リンクへ引き継ぐクエリ。
-        detail_qs=urlencode(
-            {
-                "exclude_sensitive": "1" if exclude_sensitive else "0",
-                "back": folder_url(directory, order, exclude_sensitive),
-            }
-        ),
-    )
-
-    if request.headers.get("HX-Request"):
-        return render_template("_folder_grid.html", **context)
-    return render_template(
-        "folder.html",
-        order=order,
-        order_links=[
-            (label, folder_url(directory, key, exclude_sensitive), key == order)
-            for key, (label, _) in FOLDER_ORDERS.items()
-        ],
-        **context,
     )
 
 
