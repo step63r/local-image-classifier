@@ -13,6 +13,9 @@ MEDIA_PATH_PREFIXES = ("/thumb/", "/image/")
 PAGE_RATE_LIMIT = 100  # AWS WAF's minimum allowed value
 MEDIA_RATE_LIMIT = 2000
 
+# ISO 3166-1 alpha-2. 個人利用で国内からしか使わないため、それ以外は一律遮断する。
+ALLOWED_COUNTRIES = ("JP",)
+
 
 def _media_path_statement() -> wafv2.CfnWebACL.StatementProperty:
     """Matches requests whose (URL-decoded) path starts with a media prefix."""
@@ -36,6 +39,31 @@ def _media_path_statement() -> wafv2.CfnWebACL.StatementProperty:
                 for prefix in MEDIA_PATH_PREFIXES
             ]
         )
+    )
+
+
+def _geo_block_rule(priority: int) -> wafv2.CfnWebACL.RuleProperty:
+    """Blocks every request whose source country is not in ALLOWED_COUNTRIES."""
+    return wafv2.CfnWebACL.RuleProperty(
+        name="BlockNonJapan",
+        priority=priority,
+        action=wafv2.CfnWebACL.RuleActionProperty(
+            block=wafv2.CfnWebACL.BlockActionProperty()
+        ),
+        statement=wafv2.CfnWebACL.StatementProperty(
+            not_statement=wafv2.CfnWebACL.NotStatementProperty(
+                statement=wafv2.CfnWebACL.StatementProperty(
+                    geo_match_statement=wafv2.CfnWebACL.GeoMatchStatementProperty(
+                        country_codes=list(ALLOWED_COUNTRIES)
+                    )
+                )
+            )
+        ),
+        visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+            sampled_requests_enabled=True,
+            cloud_watch_metrics_enabled=True,
+            metric_name="ImageClassifierBlockNonJapan",
+        ),
     )
 
 
@@ -104,10 +132,13 @@ class WafStack(Stack):
                 metric_name="ImageClassifierWebAcl",
             ),
             rules=[
+                # Evaluated first so foreign traffic is dropped before it
+                # reaches (and is counted by) the rate-based rules.
+                _geo_block_rule(0),
                 # Keeps the original rule name/metric so existing CloudWatch
                 # history carries over.
-                _rate_limit_rule("RateLimitPerIp", 0, PAGE_RATE_LIMIT, not_media),
-                _rate_limit_rule("RateLimitMediaPerIp", 1, MEDIA_RATE_LIMIT, media),
+                _rate_limit_rule("RateLimitPerIp", 1, PAGE_RATE_LIMIT, not_media),
+                _rate_limit_rule("RateLimitMediaPerIp", 2, MEDIA_RATE_LIMIT, media),
             ],
         )
 
