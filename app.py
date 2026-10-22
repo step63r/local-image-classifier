@@ -142,7 +142,7 @@ def login():
             session["authenticated"] = True
             session.permanent = True
             return redirect(next_url)
-        time.sleep(1)  # cheap brute-force friction on top of the WAF rate limit
+        time.sleep(1)  # cheap brute-force friction (the WAF has no rate limit)
         error = "ユーザー名またはパスワードが違います"
 
     csrf_token = secrets.token_urlsafe(16)

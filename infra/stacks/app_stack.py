@@ -103,8 +103,11 @@ class AppStack(Stack):
             self,
             "AppInstance",
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
-            machine_image=ec2.MachineImage.latest_amazon_linux2023(
-                cpu_type=ec2.AmazonLinuxCpuType.ARM_64
+            # AMIを固定する。latest_amazon_linux2023だと新AMIの公開のたびにImageId差分が出て
+            # 次回デプロイでEC2がReplacementになり、DBのマウント等の手作業が必要になるため。
+            # OSの更新はこの値を変えるのではなく、意図したReplacementとして計画的に行う。
+            machine_image=ec2.MachineImage.generic_linux(
+                {"ap-northeast-1": "ami-00a205e9e967454f6"}
             ),
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
