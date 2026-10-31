@@ -43,11 +43,33 @@ CREATE TABLE IF NOT EXISTS embeddings (
 """
 
 
+# Videos are stored as rows of `images` (media_type='video') so tags, embeddings
+# and the search UI are shared with still images. These columns are added via
+# ALTER rather than in SCHEMA so one definition covers both a fresh DB and the
+# already-populated tags.db; SQLite has no ADD COLUMN IF NOT EXISTS, hence the
+# existence check.
+MEDIA_COLUMNS = {
+    "media_type": "TEXT NOT NULL DEFAULT 'image'",
+    "duration_sec": "REAL",
+    "width": "INTEGER",
+    "height": "INTEGER",
+}
+
+
+def _ensure_media_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(images)")}
+    for name, decl in MEDIA_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE images ADD COLUMN {name} {decl}")
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _ensure_media_columns(conn)
+    conn.commit()
     return conn
 
 
@@ -74,12 +96,18 @@ def save_result(
     model: str,
     tags: list[Tag],
     tagged_at: str,
+    *,
+    media_type: str = "image",
+    duration_sec: float | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> int:
     _replace_image_row(conn, path)
     cur = conn.execute(
-        "INSERT INTO images (path, size, mtime, model, status, error, tagged_at) "
-        "VALUES (?, ?, ?, ?, 'done', NULL, ?)",
-        (path, size, mtime, model, tagged_at),
+        "INSERT INTO images (path, size, mtime, model, status, error, tagged_at, "
+        "media_type, duration_sec, width, height) "
+        "VALUES (?, ?, ?, ?, 'done', NULL, ?, ?, ?, ?, ?)",
+        (path, size, mtime, model, tagged_at, media_type, duration_sec, width, height),
     )
     image_id = cur.lastrowid
     conn.executemany(
