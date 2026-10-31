@@ -19,7 +19,8 @@ present in Postgres is skipped without touching S3 again.
 
 Incremental updates: after adding images locally, first re-run batch_tag.py
 against the E: drive (it skips files already tagged), then re-run this
-script the same way. Files deleted or moved locally are not detected or
+script the same way. Videos/GIFs go through batch_tag_video.py instead and
+are migrated by this same script (use --media video to restrict to them). Files deleted or moved locally are not detected or
 cleaned up; stale rows are left in place. Images deleted from the search UI
 are recorded in deleted_images and are skipped here.
 """
@@ -40,8 +41,13 @@ import numpy as np
 import psycopg2
 import psycopg2.extras
 from pgvector.psycopg2 import register_vector
+from boto3.s3.transfer import TransferConfig
 from PIL import Image
 from tqdm import tqdm
+
+# Videos reach >1GB each; a larger part size keeps the request count (and the
+# retry granularity on a home uplink) reasonable. Stills stay single-part.
+UPLOAD_CONFIG = TransferConfig(multipart_threshold=64 * 1024 * 1024, multipart_chunksize=32 * 1024 * 1024)
 
 PG_SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -65,6 +71,13 @@ CREATE TABLE IF NOT EXISTS images (
 -- routine --limit smoke tests, and an HNSW build is expensive DDL that must
 -- never fire from a routine, frequently re-run code path (see infra/README.md).
 ALTER TABLE images ADD COLUMN IF NOT EXISTS embedding vector(1024);
+
+-- Videos/GIFs are rows of `images` too (see batch_tag_video.py). The constant
+-- DEFAULT keeps this a metadata-only change on the already-populated table.
+ALTER TABLE images ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image';
+ALTER TABLE images ADD COLUMN IF NOT EXISTS duration_sec DOUBLE PRECISION;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS width INTEGER;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS height INTEGER;
 
 CREATE TABLE IF NOT EXISTS tags (
     image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
@@ -114,6 +127,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--region", default="ap-northeast-1")
     p.add_argument("--thumb-size", type=int, default=400, help="Longest edge, pixels")
     p.add_argument("--thumb-quality", type=int, default=85)
+    p.add_argument(
+        "--media",
+        choices=("all", "image", "video"),
+        default="all",
+        help="Restrict to one media type. Applied before --limit, so `--media video --limit 5` "
+        "smoke-tests the first 5 videos even when all images are already migrated.",
+    )
     p.add_argument("--limit", type=int, default=None, help="Process at most N rows (for testing)")
     p.add_argument("--commit-every", type=int, default=20)
     p.add_argument("--log-dir", default=Path("logs"), type=Path)
@@ -137,6 +157,13 @@ def ensure_schema(pg_conn) -> None:
     pg_conn.commit()
 
 
+def _encode_jpeg(im: Image.Image, max_edge: int, quality: int) -> bytes:
+    im.thumbnail((max_edge, max_edge), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
 def make_thumbnail(src_path: Path, max_edge: int, quality: int) -> bytes:
     # Same alpha-onto-white flattening as tagger.models.WD14Tagger.preprocess,
     # without the ONNX-specific square-padding/BGR/resize-to-model-input steps.
@@ -144,11 +171,22 @@ def make_thumbnail(src_path: Path, max_edge: int, quality: int) -> bytes:
         im = im.convert("RGBA")
         canvas = Image.new("RGBA", im.size, "WHITE")
         canvas.paste(im, mask=im)
-        im = canvas.convert("RGB")
-        im.thumbnail((max_edge, max_edge), Image.LANCZOS)
-        buf = io.BytesIO()
-        im.save(buf, format="JPEG", quality=quality, optimize=True)
-        return buf.getvalue()
+        return _encode_jpeg(canvas.convert("RGB"), max_edge, quality)
+
+
+def make_video_thumbnail(src_path: Path, max_edge: int, quality: int) -> bytes:
+    # Imported here so the image-only path doesn't pull in tagger.video (and
+    # through it onnxruntime) just to migrate stills.
+    from tagger import video
+
+    cap, info = video.open_video(str(src_path))
+    try:
+        frame = video.middle_frame(cap, info)
+    finally:
+        cap.release()
+    if frame is None:
+        raise ValueError("Could not read a frame for the thumbnail")
+    return _encode_jpeg(frame, max_edge, quality)
 
 
 def s3_object_exists(s3, bucket: str, key: str) -> bool:
@@ -169,6 +207,8 @@ def guess_content_type(ext: str) -> str:
         ".webp": "image/webp",
         ".bmp": "image/bmp",
         ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
     }.get(ext.lower(), "application/octet-stream")
 
 
@@ -182,11 +222,16 @@ def migrate_one(sqlite_conn, pg_conn, s3, bucket: str, row, thumb_size: int, thu
 
     if not s3_object_exists(s3, bucket, original_key):
         s3.upload_file(
-            str(src_path), bucket, original_key, ExtraArgs={"ContentType": guess_content_type(ext)}
+            str(src_path),
+            bucket,
+            original_key,
+            ExtraArgs={"ContentType": guess_content_type(ext)},
+            Config=UPLOAD_CONFIG,
         )
 
     if not s3_object_exists(s3, bucket, thumb_key):
-        thumb_bytes = make_thumbnail(src_path, thumb_size, thumb_quality)
+        make = make_video_thumbnail if row["media_type"] == "video" else make_thumbnail
+        thumb_bytes = make(src_path, thumb_size, thumb_quality)
         s3.put_object(Bucket=bucket, Key=thumb_key, Body=thumb_bytes, ContentType="image/jpeg")
 
     tags = sqlite_conn.execute(
@@ -200,8 +245,9 @@ def migrate_one(sqlite_conn, pg_conn, s3, bucket: str, row, thumb_size: int, thu
     with pg_conn.cursor() as cur:
         cur.execute("DELETE FROM images WHERE id = %s", (image_id,))
         cur.execute(
-            "INSERT INTO images (id, path, size, mtime, model, status, error, tagged_at, embedding) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO images (id, path, size, mtime, model, status, error, tagged_at, embedding, "
+            "media_type, duration_sec, width, height) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 image_id,
                 row["path"],
@@ -212,6 +258,10 @@ def migrate_one(sqlite_conn, pg_conn, s3, bucket: str, row, thumb_size: int, thu
                 row["error"],
                 row["tagged_at"],
                 embedding,
+                row["media_type"],
+                row["duration_sec"],
+                row["width"],
+                row["height"],
             ),
         )
         psycopg2.extras.execute_values(
@@ -256,9 +306,11 @@ def main() -> None:
     session = boto3.Session(profile_name=args.aws_profile) if args.aws_profile else boto3.Session()
     s3 = session.client("s3", region_name=args.region)
 
+    media_filter = "" if args.media == "all" else f"AND media_type = '{args.media}' "
     rows = sqlite_conn.execute(
-        "SELECT id, path, size, mtime, model, status, error, tagged_at "
-        "FROM images WHERE status = 'done' ORDER BY id"
+        "SELECT id, path, size, mtime, model, status, error, tagged_at, "
+        "media_type, duration_sec, width, height "
+        f"FROM images WHERE status = 'done' {media_filter}ORDER BY id"
     ).fetchall()
     if args.limit:
         rows = rows[: args.limit]

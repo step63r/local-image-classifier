@@ -144,7 +144,8 @@ def main() -> None:
                 except Exception as e:
                     logging.error("Failed to tag %s: %s", path, e)
                     database.save_error(
-                        conn, abs_path, stat.st_size, stat.st_mtime, args.model, str(e), tagged_at
+                        conn, abs_path, stat.st_size, stat.st_mtime, args.model, str(e), tagged_at,
+                        media_type="video",
                     )
                     errors += 1
                 else:

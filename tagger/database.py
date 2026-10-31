@@ -133,10 +133,12 @@ def save_error(
     model: str,
     error: str,
     tagged_at: str,
+    *,
+    media_type: str = "image",
 ) -> None:
     _replace_image_row(conn, path)
     conn.execute(
-        "INSERT INTO images (path, size, mtime, model, status, error, tagged_at) "
-        "VALUES (?, ?, ?, ?, 'error', ?, ?)",
-        (path, size, mtime, model, error, tagged_at),
+        "INSERT INTO images (path, size, mtime, model, status, error, tagged_at, media_type) "
+        "VALUES (?, ?, ?, ?, 'error', ?, ?, ?)",
+        (path, size, mtime, model, error, tagged_at, media_type),
     )
