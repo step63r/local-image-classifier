@@ -115,18 +115,29 @@
   <div class="mx-auto max-w-5xl px-4 py-4">
     <div id="detailRow" class="flex flex-col gap-4 md:flex-row">
       <div id="detailImgWrap" class="w-full md:w-auto">
+        {% if play_as_video %}
+        <video id="detailImg" src="/video/{{ image['id'] }}" controls preload="metadata" playsinline
+          class="max-h-[80vh] w-full rounded-lg bg-black object-contain md:w-auto"
+          onloadedmetadata="this.classList.add('loaded'); document.getElementById('detailImgWrap').classList.add('loaded')"
+          onerror="this.classList.add('loaded'); document.getElementById('detailImgWrap').classList.add('loaded')"></video>
+        {% else %}
         <a href="/image/{{ image['id'] }}" target="_blank" rel="noopener" class="block">
           <img id="detailImg" src="/image/{{ image['id'] }}" alt=""
             class="max-h-[80vh] w-full rounded-lg object-contain md:w-auto"
             onload="this.classList.add('loaded'); document.getElementById('detailImgWrap').classList.add('loaded')"
             onerror="this.classList.add('loaded'); document.getElementById('detailImgWrap').classList.add('loaded')">
         </a>
+        {% endif %}
       </div>
 
       <div class="min-w-0 flex-1">
         <p class="mb-2 break-all text-xs text-neutral-400"><a href="{{ dir_url }}" class="text-sky-400 hover:underline">{{ image['path'] }}</a></p>
+        {% set noun = '動画' if image['media_type'] == 'video' else '画像' %}
+        {% if image['media_type'] == 'video' %}
+        <p class="mb-2 text-xs text-neutral-400">再生時間 {{ image['duration_sec'] | duration }} ・ {{ image['width'] }}×{{ image['height'] }}</p>
+        {% endif %}
         <button type="button" id="deleteOpenBtn"
-          class="mb-3 rounded border border-red-800 px-3 py-1 text-xs text-red-400 hover:bg-red-950">この画像を削除する</button>
+          class="mb-3 rounded border border-red-800 px-3 py-1 text-xs text-red-400 hover:bg-red-950">この{{ noun }}を削除する</button>
         <p class="mb-3 text-xs text-neutral-500">
           薄いタグ = 現在の範囲(general {{ gt_min }}〜{{ gt_max }} / character {{ ct_min }}〜{{ ct_max }})外(保存はされているが検索対象外)
         </p>
@@ -155,7 +166,7 @@
 
     {% if related %}
     <div class="mt-8">
-      <h2 class="mb-3 text-[clamp(0.8rem,0.7rem+0.4vw,1.05rem)] text-neutral-400">関連画像</h2>
+      <h2 class="mb-3 text-[clamp(0.8rem,0.7rem+0.4vw,1.05rem)] text-neutral-400">関連{{ '動画' if image['media_type'] == 'video' else '画像' }}</h2>
       <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
         {% include "_related.html" %}
       </div>
@@ -166,8 +177,8 @@
   <div id="deleteModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4">
     <div role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle"
       class="w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-5">
-      <h2 id="deleteModalTitle" class="mb-2 text-base font-semibold">この画像を削除しますか?</h2>
-      <p class="mb-4 text-sm text-neutral-400">検索データと保存済みの画像・サムネイルが削除されます。元に戻せません。</p>
+      <h2 id="deleteModalTitle" class="mb-2 text-base font-semibold">この{{ noun }}を削除しますか?</h2>
+      <p class="mb-4 text-sm text-neutral-400">検索データと保存済みの{{ noun }}・サムネイルが削除されます。元に戻せません。</p>
       <p id="deleteError" class="mb-3 hidden text-sm text-red-400"></p>
       <div class="flex justify-end gap-2">
         <button type="button" id="deleteCancelBtn"
@@ -236,6 +247,7 @@
     (function () {
       var row = document.getElementById('detailRow');
       var img = document.getElementById('detailImg');
+      var isVideo = img.tagName === 'VIDEO';
       var GAP_PX = 16; // gap-4
 
       function updateLayout() {
@@ -243,11 +255,13 @@
           row.classList.remove('force-stack');
           return;
         }
-        if (!img.naturalWidth || !img.naturalHeight) return;
+        var w = isVideo ? img.videoWidth : img.naturalWidth;
+        var h = isVideo ? img.videoHeight : img.naturalHeight;
+        if (!w || !h) return;
 
         var rowWidth = row.clientWidth;
         var maxHeightPx = window.innerHeight * 0.8; // max-h-[80vh]
-        var ratio = img.naturalWidth / img.naturalHeight;
+        var ratio = w / h;
         var imgWidth = Math.min(ratio * maxHeightPx, rowWidth);
         var descWidth = rowWidth - imgWidth - GAP_PX;
 
@@ -264,9 +278,9 @@
         });
       }
 
-      img.addEventListener('load', updateLayout);
+      img.addEventListener(isVideo ? 'loadedmetadata' : 'load', updateLayout);
       window.addEventListener('resize', scheduleUpdate);
-      if (img.complete) {
+      if (isVideo ? img.readyState >= 1 : img.complete) {
         updateLayout();
         img.classList.add('loaded');
         document.getElementById('detailImgWrap').classList.add('loaded');

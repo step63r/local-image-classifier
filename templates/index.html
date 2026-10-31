@@ -78,7 +78,8 @@
   <header class="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
     <div class="mx-auto max-w-6xl px-4">
       {% set show_chrome = true %}
-      {% set show_save_star = true %}
+      {# 保存検索は種別・再生時間を保持できないため、それらの指定中は星を出さない。 #}
+      {% set show_save_star = not media_filtered %}
       {% include "_search_form.html" %}
     </div>
   </header>

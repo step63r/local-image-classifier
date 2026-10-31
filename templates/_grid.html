@@ -1,8 +1,10 @@
+{% from "_macros.html" import media_badge %}
 {% for img in images %}
-<a href="/detail/{{ img['id'] }}?q={{ q | urlencode }}&folder={{ folder | urlencode }}&page={{ page }}&gt_min={{ gt_min }}&gt_max={{ gt_max }}&ct_min={{ ct_min }}&ct_max={{ ct_max }}&exclude_sensitive={{ '1' if exclude_sensitive else '0' }}&sort={{ sort | urlencode }}"
-   class="img-skeleton block aspect-square overflow-hidden rounded-lg">
+<a href="/detail/{{ img['id'] }}?q={{ q | urlencode }}&folder={{ folder | urlencode }}&page={{ page }}&gt_min={{ gt_min }}&gt_max={{ gt_max }}&ct_min={{ ct_min }}&ct_max={{ ct_max }}&exclude_sensitive={{ '1' if exclude_sensitive else '0' }}&sort={{ sort | urlencode }}{{ filter_qs }}"
+   class="img-skeleton relative block aspect-square overflow-hidden rounded-lg">
   <img src="/thumb/{{ img['id'] }}" loading="lazy" class="thumb h-full w-full object-cover" alt=""
        onload="this.classList.add('loaded')" onerror="this.classList.add('loaded')">
+  {{ media_badge(img) }}
 </a>
 {% endfor %}
 

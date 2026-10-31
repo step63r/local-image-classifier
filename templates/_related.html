@@ -1,7 +1,9 @@
+{% from "_macros.html" import media_badge %}
 {% for r in related %}
-<a href="/detail/{{ r['id'] }}{{ '?' ~ context_qs if context_qs else '' }}" class="img-skeleton block aspect-square overflow-hidden rounded-lg">
+<a href="/detail/{{ r['id'] }}{{ '?' ~ context_qs if context_qs else '' }}" class="img-skeleton relative block aspect-square overflow-hidden rounded-lg">
   <img src="/thumb/{{ r['id'] }}" loading="lazy" class="thumb h-full w-full object-cover" alt=""
        onload="this.classList.add('loaded')" onerror="this.classList.add('loaded')">
+  {{ media_badge(r) }}
 </a>
 {% endfor %}
 

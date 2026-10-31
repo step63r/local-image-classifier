@@ -1,0 +1,6 @@
+{# サムネイル右下の再生時間バッジ。呼び出し側のリンクに `relative` が必要。 #}
+{% macro media_badge(row) %}
+{% if row['media_type'] == 'video' %}
+<span class="pointer-events-none absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs tabular-nums text-white">&#9654; {{ row['duration_sec'] | duration }}</span>
+{% endif %}
+{% endmacro %}

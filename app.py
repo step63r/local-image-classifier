@@ -9,6 +9,7 @@ CloudFront cache-key implications of that design.
 from __future__ import annotations
 
 import hmac
+import math
 import ntpath
 import os
 import re
@@ -23,6 +24,7 @@ import boto3
 import botocore.exceptions
 import psycopg2
 import psycopg2.extras
+from botocore.config import Config
 from flask import (
     Flask,
     Response,
@@ -38,7 +40,13 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 S3_BUCKET = os.environ["S3_BUCKET"]
+S3_REGION = os.environ.get("S3_REGION", "ap-northeast-1")
 PAGE_SIZE = 40
+
+VALID_MEDIA = ("image", "video")
+# ブラウザはリダイレクト後のURLにRangeリクエストを送り続けることがあるため、一時停止を
+# 挟んだ再生でも途切れないよう長めにする(認証情報の寿命が先に尽きた場合はリロードで復旧)。
+VIDEO_URL_TTL_SEC = 3600
 
 # batch_tag.py stores tags down to a low floor (default 0.1) so these display
 # ranges can be tuned here, at query time, without re-running inference.
@@ -52,15 +60,27 @@ SENSITIVE_EXCLUSION = f"""NOT EXISTS (
       AND tg.tag IN ({", ".join(["%s"] * len(SENSITIVE_RATINGS))})
 )"""
 
-VALID_SORTS = ("relevance_desc", "relevance_asc", "tagged_at_desc", "tagged_at_asc", "mtime_desc", "mtime_asc")
+VALID_SORTS = (
+    "relevance_desc",
+    "relevance_asc",
+    "tagged_at_desc",
+    "tagged_at_asc",
+    "mtime_desc",
+    "mtime_asc",
+    "duration_desc",
+    "duration_asc",
+)
 DEFAULT_SORT = "relevance_desc"
 
 # 関連度以外の並び順。値はそのままORDER BYへ埋め込むので、ここで列挙したキーだけ受け付ける。
+# 画像はduration_secがNULLなので、昇順でも先頭に固まらないようNULLSは常に末尾にする。
 COLUMN_SORTS = {
     "tagged_at_desc": "i.tagged_at DESC",
     "tagged_at_asc": "i.tagged_at ASC",
     "mtime_desc": "i.mtime DESC",
     "mtime_asc": "i.mtime ASC",
+    "duration_desc": "i.duration_sec DESC NULLS LAST",
+    "duration_asc": "i.duration_sec ASC NULLS LAST",
 }
 # フォルダのみの検索(タグ語なし)は関連度を計算できないため、この並び順で代替する。
 FOLDER_ONLY_SORT = "mtime_desc"
@@ -81,6 +101,24 @@ app.config.update(
     SESSION_REFRESH_EACH_REQUEST=False,
 )
 s3 = boto3.client("s3")  # picks up creds from the EC2 instance role automatically
+# 署名付きURLが実行環境の既定リージョンに左右されないよう、バケットのリージョンとSigV4を明示する。
+# addressing_styleを明示しないと、boto3 1.35ではリージョン指定があってもURLのホストが
+# グローバル(bucket.s3.amazonaws.com)になり、リージョン解決をDNSに任せることになるため。
+s3_presign = boto3.client(
+    "s3",
+    region_name=S3_REGION,
+    config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+)
+
+
+@app.template_filter("duration")
+def format_duration(seconds) -> str:
+    if seconds is None:
+        return ""
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "admin")
 _default_password_hash = generate_password_hash(os.environ.get("AUTH_PASSWORD", "changeme"))
@@ -208,11 +246,40 @@ def has_positive_term(terms: list[Term]) -> bool:
     return any(not negated for _, _, negated in terms)
 
 
-def is_searchable(terms: list[Term], folder: str) -> bool:
-    # 肯定語が無くても、フォルダ指定があれば検索として成立させる(並び順は
-    # 関連度ではなく FOLDER_ONLY_SORT へ代替 -- index()参照)。除外語だけの
-    # クエリは従来どおり成立しない。
-    return has_positive_term(terms) or bool(folder)
+def is_searchable(terms: list[Term], folder: str, media_filtered: bool = False) -> bool:
+    # 肯定語が無くても、フォルダ指定や種別・再生時間の絞り込みがあれば検索として
+    # 成立させる(並び順は関連度ではなく FOLDER_ONLY_SORT へ代替 -- index()参照)。
+    # 除外語だけのクエリは従来どおり成立しない。
+    return has_positive_term(terms) or bool(folder) or media_filtered
+
+
+def get_media_filters(source=None) -> tuple[str, float | None, float | None]:
+    # 再生時間はUI上「分」。空・不正値・負値は「指定なし」(None)として扱う。
+    source = request.args if source is None else source
+    media = source.get("media", "")
+    if media not in VALID_MEDIA:
+        media = ""
+
+    def minutes(name: str) -> float | None:
+        try:
+            value = float(source.get(name, "").strip())
+        except ValueError:
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
+
+    return media, minutes("dur_min"), minutes("dur_max")
+
+
+def media_filter_qs(media: str, dur_min: float | None, dur_max: float | None) -> str:
+    # テンプレートが手組みしているリンクの末尾に足す用(先頭に&を付ける)。
+    params = {}
+    if media:
+        params["media"] = media
+    if dur_min is not None:
+        params["dur_min"] = dur_min
+    if dur_max is not None:
+        params["dur_max"] = dur_max
+    return "&" + urlencode(params) if params else ""
 
 
 def _float_arg(name: str, absent_default: float, empty_default: float, source=None) -> float:
@@ -275,6 +342,10 @@ def search_images(
     exclude_sensitive: bool,
     sort: str,
     page: int,
+    *,
+    media: str = "",
+    dur_min: float | None = None,
+    dur_max: float | None = None,
 ):
     offset = (page - 1) * PAGE_SIZE
     threshold_clause = (
@@ -288,6 +359,18 @@ def search_images(
     if folder:
         conditions.append("i.path LIKE %s ESCAPE '\\'")
         params.append(like_pattern(folder))
+
+    if media:
+        conditions.append("i.media_type = %s")
+        params.append(media)
+
+    # 画像はduration_secがNULLなので、再生時間を指定すると結果は自然に動画だけになる。
+    if dur_min is not None:
+        conditions.append("i.duration_sec >= %s")
+        params.append(dur_min * 60)
+    if dur_max is not None:
+        conditions.append("i.duration_sec <= %s")
+        params.append(dur_max * 60)
 
     if exclude_sensitive:
         conditions.append(SENSITIVE_EXCLUSION)
@@ -339,7 +422,7 @@ def search_images(
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT i.id, i.path FROM images i
+            SELECT i.id, i.path, i.media_type, i.duration_sec FROM images i
             WHERE {where}
             ORDER BY {order_by}
             LIMIT %s OFFSET %s
@@ -369,12 +452,15 @@ def get_related_images(cur, image_id: int, offset: int = 0, limit: int = RELATED
     limit = min(limit, RELATED_MAX - offset)
     if limit <= 0:
         return [], False
+    # 画像と動画は同じembedding空間に入るが、画像の近傍に動画が混ざる(逆も同様)のは
+    # 関連表示として役に立たないため、同じ種別に限定する。
     cur.execute(
-        "SELECT id, path FROM images "
+        "SELECT id, path, media_type, duration_sec FROM images "
         "WHERE id != %s AND embedding IS NOT NULL "
+        "AND media_type = (SELECT media_type FROM images WHERE id = %s) "
         "ORDER BY embedding <=> (SELECT embedding FROM images WHERE id = %s), id "
         "LIMIT %s OFFSET %s",
-        (image_id, image_id, limit + 1, offset),
+        (image_id, image_id, image_id, limit + 1, offset),
     )
     rows = cur.fetchall()
     return rows[:limit], len(rows) > limit and offset + limit < RELATED_MAX
@@ -390,6 +476,10 @@ def build_url(
     ct_max: float,
     exclude_sensitive: bool,
     sort: str,
+    *,
+    media: str = "",
+    dur_min: float | None = None,
+    dur_max: float | None = None,
 ) -> str:
     params = {"page": page}
     if q:
@@ -406,6 +496,13 @@ def build_url(
     params["exclude_sensitive"] = "1" if exclude_sensitive else "0"
     if sort != DEFAULT_SORT:
         params["sort"] = sort
+    # 保存検索(saved_searches)はこれらを保持しないため、呼び出し側が渡さない限り付かない。
+    if media:
+        params["media"] = media
+    if dur_min is not None:
+        params["dur_min"] = dur_min
+    if dur_max is not None:
+        params["dur_max"] = dur_max
     return "/?" + urlencode(params)
 
 
@@ -466,10 +563,12 @@ def index():
     gt_min, gt_max, ct_min, ct_max = get_thresholds()
     exclude_sensitive = get_exclude_sensitive()
     sort = get_sort()
+    media, dur_min, dur_max = get_media_filters()
+    media_filtered = bool(media) or dur_min is not None or dur_max is not None
     # 関連度ソートは最低1つの肯定タグ条件がないと計算できないため、キーワードも
-    # フォルダも空のクエリは検索として成立させない(フォーム側でも送信ボタンを
-    # 無効化している -- _search_form.html参照)。
-    has_searched = bool(request.args) and is_searchable(tags, folder)
+    # フォルダも種別・再生時間の指定も空のクエリは検索として成立させない
+    # (フォーム側でも送信ボタンを無効化している -- _search_form.html参照)。
+    has_searched = bool(request.args) and is_searchable(tags, folder, media_filtered)
     # フォルダのみの検索で関連度ソートが選ばれていると並べ替えの基準が無い。
     # ドロップダウンの表示と実際の並びがずれないよう、sort自体を差し替える。
     if has_searched and not has_positive_term(tags) and sort not in COLUMN_SORTS:
@@ -479,7 +578,8 @@ def index():
         conn = get_conn()
         try:
             rows, total = search_images(
-                conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, sort, page
+                conn, tags, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, sort, page,
+                media=media, dur_min=dur_min, dur_max=dur_max,
             )
             with conn.cursor() as cur:
                 is_saved = (
@@ -493,7 +593,10 @@ def index():
 
         has_next = page * PAGE_SIZE < total
         next_url = (
-            build_url(page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, sort)
+            build_url(
+                page + 1, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, sort,
+                media=media, dur_min=dur_min, dur_max=dur_max,
+            )
             if has_next
             else None
         )
@@ -516,6 +619,11 @@ def index():
         next_url=next_url,
         has_searched=has_searched,
         is_saved=is_saved,
+        media=media,
+        dur_min=dur_min,
+        dur_max=dur_max,
+        media_filtered=media_filtered,
+        filter_qs=media_filter_qs(media, dur_min, dur_max),
     )
 
     if request.headers.get("HX-Request"):
@@ -571,6 +679,32 @@ def thumb(image_id: int):
     return _stream_s3(f"thumb/{image_id}.jpg", "image/jpeg")
 
 
+@app.route("/video/<int:image_id>")
+@login_required
+def video(image_id: int):
+    # 動画はEC2(t4g.micro)を経由させず、短命のS3署名付きURLへリダイレクトして
+    # ブラウザにS3から直接Rangeで取得させる。ログインのゲートはこのルートで保たれる。
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT path, media_type FROM images WHERE id = %s", (image_id,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if row is None or row["media_type"] != "video":
+        abort(404)
+    ext = Path(row["path"]).suffix.lower()
+    url = s3_presign.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": S3_BUCKET, "Key": f"original/{image_id}{ext}"},
+        ExpiresIn=VIDEO_URL_TTL_SEC,
+    )
+    resp = redirect(url, code=302)
+    # 署名付きURLは期限付きなので、CloudFrontやブラウザにキャッシュさせない。
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
+
 @app.route("/detail/<int:image_id>")
 @login_required
 def detail(image_id: int):
@@ -579,9 +713,14 @@ def detail(image_id: int):
     exclude_sensitive = get_exclude_sensitive()
     q = request.args.get("q", "").strip()
     sort = get_sort()
+    media, dur_min, dur_max = get_media_filters()
+    media_filtered = bool(media) or dur_min is not None or dur_max is not None
+    media_kwargs = dict(media=media, dur_min=dur_min, dur_max=dur_max)
     # 検索として成立しない(タグ条件が無い)クエリの保存は意味がないため、
     # 星は遷移元が実際の検索だった場合にだけ出す -- index()のhas_searchedと同じ基準。
-    show_save_star = is_searchable(parse_query(q), folder)
+    # 保存検索は種別・再生時間を保持できず、保存すると絞り込みが黙って落ちるため、
+    # それらを指定した検索では星を出さない。
+    show_save_star = is_searchable(parse_query(q), folder) and not media_filtered
 
     def tag_url(tag: str) -> str:
         # Quoted so parse_query() treats it as an exact-match term rather
@@ -589,14 +728,16 @@ def detail(image_id: int):
         # exact tag, not any tag containing it as a substring. Always opens
         # with the default (relevance) sort, same as a fresh search.
         return build_url(
-            1, f'"{tag}"', folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, DEFAULT_SORT
+            1, f'"{tag}"', folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, DEFAULT_SORT,
+            **media_kwargs,
         )
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, path, (embedding IS NOT NULL) AS has_embedding FROM images WHERE id = %s",
+                "SELECT id, path, media_type, duration_sec, width, height, "
+                "(embedding IS NOT NULL) AS has_embedding FROM images WHERE id = %s",
                 (image_id,),
             )
             img = cur.fetchone()
@@ -635,6 +776,7 @@ def detail(image_id: int):
         ct_max,
         exclude_sensitive,
         sort,
+        **media_kwargs,
     )
     # パスのリンクは「キーワード空・フォルダ絞り込みのみ」の検索へ飛ばす。DBのパスは
     # Windows形式で、アプリはLinux上で動くため os.path ではなく ntpath で分割する。
@@ -651,7 +793,11 @@ def detail(image_id: int):
         ct_max,
         exclude_sensitive,
         FOLDER_ONLY_SORT,
+        **media_kwargs,
     )
+
+    # GIFはメディア種別こそ動画だが<video>では再生できないため、<img>(アニメ再生)で出す。
+    play_as_video = img["media_type"] == "video" and Path(img["path"]).suffix.lower() != ".gif"
 
     return render_template(
         "detail.html",
@@ -673,6 +819,10 @@ def detail(image_id: int):
         ct_max=ct_max,
         exclude_sensitive=exclude_sensitive,
         sort=sort,
+        media=media,
+        dur_min=dur_min,
+        dur_max=dur_max,
+        play_as_video=play_as_video,
         show_save_star=show_save_star,
         is_saved=is_saved,
         passes=passes,

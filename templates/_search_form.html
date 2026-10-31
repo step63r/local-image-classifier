@@ -46,7 +46,25 @@
         <option value="tagged_at_asc" {{ 'selected' if sort == 'tagged_at_asc' else '' }}>タグ付け日時が古い順</option>
         <option value="mtime_desc" {{ 'selected' if sort == 'mtime_desc' else '' }}>ファイル更新日時が新しい順</option>
         <option value="mtime_asc" {{ 'selected' if sort == 'mtime_asc' else '' }}>ファイル更新日時が古い順</option>
+        <option value="duration_desc" {{ 'selected' if sort == 'duration_desc' else '' }}>再生時間が長い順</option>
+        <option value="duration_asc" {{ 'selected' if sort == 'duration_asc' else '' }}>再生時間が短い順</option>
       </select>
+      <select name="media" id="mediaSelect"
+        class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-32 sm:text-sm">
+        <option value="" {{ 'selected' if not media else '' }}>画像・動画</option>
+        <option value="image" {{ 'selected' if media == 'image' else '' }}>画像のみ</option>
+        <option value="video" {{ 'selected' if media == 'video' else '' }}>動画のみ</option>
+      </select>
+      <div class="flex items-center gap-1 text-xs text-neutral-400">
+        <input type="number" name="dur_min" id="durMinInput" min="0" step="any" inputmode="decimal"
+          value="{{ '' if dur_min is none else '%g'|format(dur_min) }}" placeholder="最短"
+          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-20 sm:text-sm">
+        <span>~</span>
+        <input type="number" name="dur_max" id="durMaxInput" min="0" step="any" inputmode="decimal"
+          value="{{ '' if dur_max is none else '%g'|format(dur_max) }}" placeholder="最長"
+          class="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base sm:w-20 sm:text-sm">
+        <span>分</span>
+      </div>
       <div class="flex flex-col gap-1 text-xs text-neutral-400 sm:w-48">
         <div class="flex items-center justify-between">
           <span>general</span>
@@ -92,24 +110,30 @@
 
 <script>
   (function () {
-    // キーワードもフォルダも空の検索は成立しない(関連度ソートの基準が無く、
-    // 全件表示にもなってしまう)ため送信自体をさせない(エラー表示は出さず、
-    // ボタンを無効化するだけに留める -- 仕様判断)。フォルダのみは許容する。
+    // キーワードもフォルダも種別・再生時間の指定も空の検索は成立しない(関連度
+    // ソートの基準が無く、全件表示にもなってしまう)ため送信自体をさせない
+    // (エラー表示は出さず、ボタンを無効化するだけに留める -- 仕様判断)。
+    // フォルダのみ、種別のみ、再生時間のみは許容する。
     var input = document.getElementById('searchInput');
     var folderInput = document.getElementById('folderInput');
+    var mediaSelect = document.getElementById('mediaSelect');
+    var durMinInput = document.getElementById('durMinInput');
+    var durMaxInput = document.getElementById('durMaxInput');
     var submitBtn = document.getElementById('searchSubmitBtn');
-    if (!input || !folderInput || !submitBtn) return;
+    if (!input || !folderInput || !mediaSelect || !durMinInput || !durMaxInput || !submitBtn) return;
 
     function isEmpty() {
-      return input.value.trim() === '' && folderInput.value.trim() === '';
+      return input.value.trim() === '' && folderInput.value.trim() === ''
+        && mediaSelect.value === '' && durMinInput.value.trim() === '' && durMaxInput.value.trim() === '';
     }
 
     function updateState() {
       submitBtn.disabled = isEmpty();
     }
 
-    input.addEventListener('input', updateState);
-    folderInput.addEventListener('input', updateState);
+    [input, folderInput, mediaSelect, durMinInput, durMaxInput].forEach(function (el) {
+      el.addEventListener('input', updateState);
+    });
     updateState();
 
     var form = input.closest('form');
