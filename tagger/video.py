@@ -69,9 +69,16 @@ def iter_sample_frames(
 
 
 def middle_frame(cap: cv2.VideoCapture, info: VideoInfo) -> Image.Image | None:
-    cap.set(cv2.CAP_PROP_POS_FRAMES, int(info.duration_sec / 2 * info.fps))
-    ok, frame = cap.read()
-    return Image.fromarray(frame[:, :, ::-1]) if ok else None
+    mid = int(info.duration_sec / 2 * info.fps)
+    # Streams with broken NAL units can fail every seek past some point while
+    # still decoding from the start, so fall back to earlier positions rather
+    # than giving up (the full decode-from-start would be too slow for long files).
+    for pos in (mid, mid * 3 // 4, mid // 2, mid // 4, 0):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+        ok, frame = cap.read()
+        if ok:
+            return Image.fromarray(frame[:, :, ::-1])
+    return None
 
 
 def aggregate(results: list[InferResult]) -> tuple[list[Tag], np.ndarray | None]:
