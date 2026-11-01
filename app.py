@@ -496,7 +496,7 @@ def build_url(
     params["exclude_sensitive"] = "1" if exclude_sensitive else "0"
     if sort != DEFAULT_SORT:
         params["sort"] = sort
-    # 保存検索(saved_searches)はこれらを保持しないため、呼び出し側が渡さない限り付かない。
+    # 指定が無い(デフォルトの)検索のURLに空のパラメータを付けないため、省略する。
     if media:
         params["media"] = media
     if dur_min is not None:
@@ -514,6 +514,9 @@ def describe_search(
     ct_min: float,
     ct_max: float,
     exclude_sensitive: bool,
+    media: str,
+    dur_min: float | None,
+    dur_max: float | None,
 ) -> str:
     # Generated fresh from the stored params on every render (never persisted
     # as its own column), so refining this format later needs no backfill.
@@ -531,6 +534,14 @@ def describe_search(
         parts.append(f"character {ct_min:g}-{ct_max:g}")
     if not exclude_sensitive:
         parts.append("R18含む")
+    if media:
+        parts.append({"image": "画像のみ", "video": "動画のみ"}[media])
+    if dur_min is not None and dur_max is not None:
+        parts.append(f"{dur_min:g}〜{dur_max:g}分")
+    elif dur_min is not None:
+        parts.append(f"{dur_min:g}分以上")
+    elif dur_max is not None:
+        parts.append(f"{dur_max:g}分以下")
     return " ・ ".join(parts) if parts else "(全件)"
 
 
@@ -543,12 +554,17 @@ def find_saved_search(
     ct_min: float,
     ct_max: float,
     exclude_sensitive: bool,
+    media: str,
+    dur_min: float | None,
+    dur_max: float | None,
 ):
+    # dur_*は「上限/下限なし」をNULLで持つため、`=`ではNULL同士が一致しない。
     cur.execute(
         "SELECT id FROM saved_searches "
         "WHERE q = %s AND folder = %s AND gt_min = %s AND gt_max = %s "
-        "AND ct_min = %s AND ct_max = %s AND exclude_sensitive = %s",
-        (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive),
+        "AND ct_min = %s AND ct_max = %s AND exclude_sensitive = %s "
+        "AND media = %s AND dur_min IS NOT DISTINCT FROM %s AND dur_max IS NOT DISTINCT FROM %s",
+        (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, media, dur_min, dur_max),
     )
     return cur.fetchone()
 
@@ -584,7 +600,8 @@ def index():
             with conn.cursor() as cur:
                 is_saved = (
                     find_saved_search(
-                        cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive
+                        cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive,
+                        media, dur_min, dur_max,
                     )
                     is not None
                 )
@@ -718,9 +735,7 @@ def detail(image_id: int):
     media_kwargs = dict(media=media, dur_min=dur_min, dur_max=dur_max)
     # 検索として成立しない(タグ条件が無い)クエリの保存は意味がないため、
     # 星は遷移元が実際の検索だった場合にだけ出す -- index()のhas_searchedと同じ基準。
-    # 保存検索は種別・再生時間を保持できず、保存すると絞り込みが黙って落ちるため、
-    # それらを指定した検索では星を出さない。
-    show_save_star = is_searchable(parse_query(q), folder) and not media_filtered
+    show_save_star = is_searchable(parse_query(q), folder, media_filtered)
 
     def tag_url(tag: str) -> str:
         # Quoted so parse_query() treats it as an exact-match term rather
@@ -752,7 +767,10 @@ def detail(image_id: int):
                 get_related_images(cur, image_id) if img["has_embedding"] else ([], False)
             )
             is_saved = show_save_star and (
-                find_saved_search(cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+                find_saved_search(
+                    cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive,
+                    media, dur_min, dur_max,
+                )
                 is not None
             )
     finally:
@@ -912,12 +930,14 @@ def toggle_saved_search():
     folder = request.form.get("folder", "").strip()
     gt_min, gt_max, ct_min, ct_max = get_thresholds(request.form)
     exclude_sensitive = get_exclude_sensitive(request.form)
+    media, dur_min, dur_max = get_media_filters(request.form)
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             existing = find_saved_search(
-                cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive
+                cur, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive,
+                media, dur_min, dur_max,
             )
             if existing:
                 cur.execute("DELETE FROM saved_searches WHERE id = %s", (existing["id"],))
@@ -925,9 +945,11 @@ def toggle_saved_search():
             else:
                 cur.execute(
                     "INSERT INTO saved_searches "
-                    "(q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive),
+                    "(q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, "
+                    "media, dur_min, dur_max) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive,
+                     media, dur_min, dur_max),
                 )
                 is_saved = True
     finally:
@@ -942,6 +964,9 @@ def toggle_saved_search():
         ct_min=ct_min,
         ct_max=ct_max,
         exclude_sensitive=exclude_sensitive,
+        media=media,
+        dur_min=dur_min,
+        dur_max=dur_max,
         is_saved=is_saved,
     )
 
@@ -953,7 +978,8 @@ def saved_searches():
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive "
+                "SELECT id, q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, "
+                "media, dur_min, dur_max "
                 "FROM saved_searches ORDER BY created_at DESC"
             )
             rows = cur.fetchall()
@@ -965,11 +991,12 @@ def saved_searches():
             id=r["id"],
             label=describe_search(
                 r["q"], r["folder"], r["gt_min"], r["gt_max"], r["ct_min"], r["ct_max"],
-                r["exclude_sensitive"],
+                r["exclude_sensitive"], r["media"], r["dur_min"], r["dur_max"],
             ),
             url=build_url(
                 1, r["q"], r["folder"], r["gt_min"], r["gt_max"], r["ct_min"], r["ct_max"],
                 r["exclude_sensitive"], DEFAULT_SORT,
+                media=r["media"], dur_min=r["dur_min"], dur_max=r["dur_max"],
             ),
         )
         for r in rows

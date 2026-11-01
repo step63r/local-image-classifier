@@ -100,6 +100,12 @@ CREATE INDEX IF NOT EXISTS idx_images_status ON images(status);
 -- No user_id: single global user, same as every other table here. The
 -- UNIQUE constraint doubles as the "is this exact search already saved"
 -- lookup key, so no separate hash/key column is needed.
+-- media/dur_* were added to the key after the table first shipped. They are
+-- deliberately not an ALTER: the old UNIQUE constraint (auto-named, possibly
+-- truncated) would have to be dropped and recreated, which can't be written
+-- idempotently here. The table was dropped and recreated instead, so this
+-- CREATE is the only definition. NULLS NOT DISTINCT (PG15+) is required so that
+-- two searches with no duration bound still collide on the key.
 CREATE TABLE IF NOT EXISTS saved_searches (
     id SERIAL PRIMARY KEY,
     q TEXT NOT NULL DEFAULT '',
@@ -109,8 +115,13 @@ CREATE TABLE IF NOT EXISTS saved_searches (
     ct_min DOUBLE PRECISION NOT NULL,
     ct_max DOUBLE PRECISION NOT NULL,
     exclude_sensitive BOOLEAN NOT NULL,
+    media TEXT NOT NULL DEFAULT '',
+    dur_min DOUBLE PRECISION,
+    dur_max DOUBLE PRECISION,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive)
+    UNIQUE NULLS NOT DISTINCT (
+        q, folder, gt_min, gt_max, ct_min, ct_max, exclude_sensitive, media, dur_min, dur_max
+    )
 );
 """
 
