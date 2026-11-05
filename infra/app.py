@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """CDK app entrypoint.
 
-Requires a domainName context value on every invocation (see infra/README.md):
-    cdk deploy --all -c domainName=images.example.com
+Requires domainName and webAclArn context values on every invocation (see infra/README.md):
+    cdk deploy --all -c domainName=images.example.com -c webAclArn=<ARN>
 
 No SSH key pair or inbound port 22 is created -- instance access is via AWS
 Systems Manager Session Manager only (console or `aws ssm start-session`).
@@ -16,11 +16,9 @@ import aws_cdk as cdk
 
 from stacks.app_stack import AppStack
 from stacks.certificate_stack import CertificateStack
-from stacks.waf_stack import WafStack
 
 APP_REGION = "ap-northeast-1"
 CERT_REGION = "us-east-1"  # ACM certs for CloudFront must live in us-east-1
-WAF_REGION = "us-east-1"  # CLOUDFRONT-scope WAF WebACLs must live in us-east-1
 
 
 def cloudfront_origin_facing_prefix_list_id(region: str) -> str:
@@ -58,12 +56,15 @@ cert_stack = CertificateStack(
     cross_region_references=True,
 )
 
-waf_stack = WafStack(
-    app,
-    "ImageClassifierWafStack",
-    env=cdk.Environment(account=account, region=WAF_REGION),
-    cross_region_references=True,
-)
+# WebACLは他アプリと共有するためCDK管理外に置いている。渡し忘れると
+# CloudFrontからWebACLが外れるため、未指定のまま進めずここで止める。
+web_acl_arn = app.node.try_get_context("webAclArn")
+if not web_acl_arn:
+    raise SystemExit(
+        "Missing required context. Pass -c webAclArn=<CLOUDFRONT-scope WebACL ARN> to every `cdk` command, e.g.:\n"
+        "  cdk deploy --all -c domainName=images.example.com "
+        "-c webAclArn=arn:aws:wafv2:us-east-1:123456789012:global/webacl/NAME/ID"
+    )
 
 app_stack = AppStack(
     app,
@@ -72,12 +73,11 @@ app_stack = AppStack(
     auth_username=auth_username,
     auth_password=auth_password,
     certificate=cert_stack.certificate,
-    web_acl_arn=waf_stack.web_acl.attr_arn,
+    web_acl_arn=web_acl_arn,
     cloudfront_prefix_list_id=cloudfront_origin_facing_prefix_list_id(APP_REGION),
     env=cdk.Environment(account=account, region=APP_REGION),
     cross_region_references=True,
 )
 app_stack.add_stack_dependency(cert_stack)
-app_stack.add_stack_dependency(waf_stack)
 
 app.synth()

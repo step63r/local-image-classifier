@@ -61,8 +61,8 @@ $env:IMAGEAPP_BUCKET = "<MediaBucketName>"
 
 ```powershell
 cd infra
-cdk diff -c domainName=image-classifier.minatoproject.com
-cdk deploy -c domainName=image-classifier.minatoproject.com
+cdk diff -c domainName=image-classifier.minatoproject.com -c webAclArn=<WebACLのARN>
+cdk deploy -c domainName=image-classifier.minatoproject.com -c webAclArn=<WebACLのARN>
 ```
 
 テスト・Lint・型チェックの自動化は現状このリポジトリに存在しない(pytest/ruff等の設定なし)。手動確認は`--limit N`オプションで少数件のスモークテストを行うのが基本パターン(`batch_tag.py --limit`, `batch_tag_video.py --limit`, `migrate_to_aws.py --limit`, `backfill_embeddings.py --limit`, `push_embeddings.py --limit`)。`migrate_to_aws.py`の`--limit`は`--media`による絞り込み**後**に適用されるため、移行済みの画像が多い環境でも`--media video --limit 5`で動画だけを試せる(`--media`なしの`--limit 1`はスキーマ反映だけの用途で、先頭の移行済み行をスキップして終わる)。
@@ -101,6 +101,6 @@ AWS初回デプロイの全手順・既知の注意点は[infra/README.md](infra
 
 ### infra/ (AWS CDK)
 
-`infra/stacks/`に3スタック: `certificate_stack.py`(us-east-1のACM証明書)、`app_stack.py`(EC2 t4g.micro + 自前PostgreSQL/pgvector + S3 + CloudFront)、`waf_stack.py`。EC2にはSSH鍵も22番ポートも無く、管理アクセスはSystems Manager Session Managerのみ(ポートフォワードも`AWS-StartPortForwardingSession`で代替)。S3バケットは`RemovalPolicy.RETAIN`で`cdk destroy`しても消えない。
+`infra/stacks/`に2スタック: `certificate_stack.py`(us-east-1のACM証明書)、`app_stack.py`(EC2 t4g.micro + 自前PostgreSQL/pgvector + S3 + CloudFront)。CloudFrontに付けるAWS WAF WebACL(CLOUDFRONTスコープ)は他アプリと共有するためCDK管理外で、ARNを`-c webAclArn=<ARN>`で全`cdk`コマンドに渡す(未指定だと`app.py`が停止する)。EC2にはSSH鍵も22番ポートも無く、管理アクセスはSystems Manager Session Managerのみ(ポートフォワードも`AWS-StartPortForwardingSession`で代替)。S3バケットは`RemovalPolicy.RETAIN`で`cdk destroy`しても消えない。
 
 **EC2再作成の二重チェック(必須)**: PostgreSQLのデータはEC2のルートEBS上にあり、バックアップも別ボリュームも無いため、`ec2.Instance`が置き換わる(Replacement)と全データが失われる(過去に実際に発生)。`user_data`・AMI・インスタンスタイプ・ブロックデバイス・参照するAssetなど、EC2の再作成を招きうる変更(依存関係経由の変更も含む)を`infra/`に加える場合、Claudeは`cdk deploy`を案内する前に必ずユーザへ`cdk diff <スタック名>`の出力をClaude Codeに貼り付けるよう要求し、`AppInstance`に`Replacement`/`replace`が含まれないかを確認してから可否を伝える。diff出力を見ずに「デプロイして安全」とは言わない。Replacementが含まれる場合は、デプロイを止めてDBのバックアップ手段を先に提案する。`infra/`を変更しない場合でも、`system_setup.sh`等のAsset変更はuser_dataに波及するため同様に扱う。ドメイン(`image-classifier.minatoproject.com`)のDNSはCloudflareで管理し、CNAMEは必ず「DNSのみ」(プロキシ無効)にする必要がある。

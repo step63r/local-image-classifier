@@ -1,4 +1,4 @@
-from aws_cdk import CfnOutput, Stack
+from aws_cdk import CfnOutput, RemovalPolicy, Stack
 from aws_cdk import aws_wafv2 as wafv2
 from constructs import Construct
 
@@ -57,5 +57,7 @@ class WafStack(Stack):
             ),
             rules=[_geo_block_rule(0)],
         )
+        # 他アプリと共有するCDK管理外のWebACLへ移行するため、スタック削除時にWebACL本体を残す。
+        self.web_acl.apply_removal_policy(RemovalPolicy.RETAIN)
 
         CfnOutput(self, "WebAclArn", value=self.web_acl.attr_arn)
